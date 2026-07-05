@@ -720,7 +720,6 @@ function getSurvivalTag(secs) {
 }
 
 const GOALS = [60, 120, 180, 300, 600];
-const GOAL_LABELS = {60:'小试牛刀',120:'渐入佳境',180:'硬核挑战',300:'终极考验',600:'传说级'};
 
 const MILESTONES = [
   { time: 60, kills: 0, label: '存活60秒', reward: 'speed_boost', icon: '⚡', desc: '移速提升10秒' },
@@ -1190,6 +1189,7 @@ class Game {
     this.victoryTimer = 0;
     this.victoryExitTimer = 0;
     this.reinforcements = [];
+    this.survivalHistory = [];
     // Wave system
     this.wave = 1;
     this.waveState = 'attacking';
@@ -1253,6 +1253,14 @@ class Game {
     this.jumpArcOffset = 0;
     this.mouseX = CX;
     this.mouseY = CY;
+    // Joystick
+    this.joystickEnabled = false;
+    this.joystickActive = false;
+    this.joystickTouchId = null;
+    this.joystickDir = { x: 0, y: 0 };
+    this.joystickMag = 0;
+    this.joystickKnobX = 0;
+    this.joystickKnobY = 0;
     // Stored shield artifact
     this.storedShield = 0;
     this.isPreShop = false;
@@ -1265,7 +1273,7 @@ class Game {
     this.hpBarDisplay = 3;
     this.gameMode = 'challenge';
     this.generateGoal();
-    this.debugInfo = { fps: 0, dt: 0, frameCount: 0, fpsTimer: 0, showDebug: true, record: [], errors: [], audioLog: [] };
+    this.debugInfo = { fps: 0, dt: 0, frameCount: 0, fpsTimer: 0, showDebug: false, record: [], errors: [], audioLog: [] };
     this.debugPendingDownload = null;
 
     resizeCanvas();
@@ -1376,6 +1384,36 @@ class Game {
     ctx.textBaseline = 'alphabetic';
   }
 
+  drawJoystick() {
+    const jcX = CW - SIZE * .28;
+    const jcY = CH - SIZE * .28;
+    const outerR = SIZE * .14;
+    const innerR = SIZE * .06;
+    const knobX = this.joystickActive ? this.joystickKnobX : jcX;
+    const knobY = this.joystickActive ? this.joystickKnobY : jcY;
+    ctx.save();
+    // Dark backdrop
+    ctx.globalAlpha = 0.25;
+    ctx.fillStyle = '#000';
+    ctx.beginPath();
+    ctx.arc(jcX, jcY, outerR + 4, 0, Math.PI * 2);
+    ctx.fill();
+    // Outer ring
+    ctx.globalAlpha = 0.6;
+    ctx.strokeStyle = 'rgba(255,255,255,.8)';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.arc(jcX, jcY, outerR, 0, Math.PI * 2);
+    ctx.stroke();
+    // Inner knob
+    ctx.globalAlpha = 0.8;
+    ctx.fillStyle = '#fff';
+    ctx.beginPath();
+    ctx.arc(knobX, knobY, innerR, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+
   drawButton(label, x, y, w, h, { bg, hoverBg, fg, hoverFg, fontSize, radius } = {}) {
     const hovered = this.hoverBtn === label;
     const fb = hovered ? (hoverBg || '#a5d6a7') : (bg || '#81c784');
@@ -1480,7 +1518,8 @@ class Game {
       bestPerfectTime: this.bestPerfectTime,
       bonusHp: this.bonusHp,
       gold: this.gold,
-      claimedMilestones: this.claimedMilestones
+      claimedMilestones: this.claimedMilestones,
+      survivalHistory: this.survivalHistory
     };
     try {
       localStorage.setItem('egg_defense', JSON.stringify(data));
@@ -1507,6 +1546,7 @@ class Game {
       this.bonusHp = (this.achievements.includes('iron_wall') ? 1 : 0) + (this.achievements.includes('ten_games') ? 1 : 0) + (this.achievements.includes('max_skin') ? 1 : 0);
       this.gold = d.gold || 0;
       this.claimedMilestones = d.claimedMilestones || [];
+      this.survivalHistory = d.survivalHistory || [];
       // Also persist to localStorage so it's available offline
       try { localStorage.setItem('egg_defense', JSON.stringify(d)); } catch(e) {}
       this.draw();
@@ -1517,7 +1557,8 @@ class Game {
     try {
       const s = JSON.parse(localStorage.getItem('egg_settings') || '{}');
       SFX.muted = s.muted === true;
-      this.debugInfo.showDebug = s.showDebug !== false;
+      this.debugInfo.showDebug = s.showDebug === true;
+      this.joystickEnabled = s.joystickEnabled === true;
     } catch(e) {}
   }
 
@@ -1525,7 +1566,8 @@ class Game {
     try {
       localStorage.setItem('egg_settings', JSON.stringify({
         muted: SFX.muted,
-        showDebug: this.debugInfo.showDebug
+        showDebug: this.debugInfo.showDebug,
+        joystickEnabled: this.joystickEnabled
       }));
     } catch(e) {}
   }
@@ -1536,16 +1578,46 @@ class Game {
   }
 
   generateGoal() {
-    const r = Math.random();
-    if (r < 0.4) this.challengeGoal = 60;
-    else if (r < 0.7) this.challengeGoal = 120;
-    else if (r < 0.9) this.challengeGoal = 180;
-    else if (r < 0.97) this.challengeGoal = 300;
-    else this.challengeGoal = 600;
-    this.challengeLabel = GOAL_LABELS[this.challengeGoal] || '';
+    const tiers = [
+      { goal: 60, label: '小试牛刀', base: 40 },
+      { goal: 120, label: '渐入佳境', base: 30 },
+      { goal: 180, label: '硬核挑战', base: 20 },
+      { goal: 300, label: '终极考验', base: 7 },
+      { goal: 600, label: '传说级', base: 3 },
+    ];
+    // Use dynamic weights if enough history
+    let weights = tiers.map(t => t.base);
+    if (this.survivalHistory.length >= 3) {
+      const hist = this.survivalHistory;
+      const n = hist.length;
+      weights = tiers.map((t, i) => {
+        const prevGoal = i > 0 ? tiers[i - 1].goal : 0;
+        // frequency of survival times in this tier's difficulty bucket
+        const bucketFreq = i === tiers.length - 1
+          ? hist.filter(v => v >= prevGoal).length / n
+          : hist.filter(v => v >= prevGoal && v < t.goal).length / n;
+        return t.base * 0.3 + bucketFreq * 100 * 0.7;
+      });
+    }
+    const total = weights.reduce((s, w) => s + w, 0);
+    let r = Math.random() * total;
+    let chosen = tiers[0];
+    for (let i = 0; i < tiers.length; i++) {
+      r -= weights[i];
+      if (r <= 0) { chosen = tiers[i]; break; }
+    }
+    this.challengeGoal = chosen.goal;
+    this.challengeLabel = chosen.label;
   }
 
   startGame() {
+    // Reset joystick state
+    this.joystickActive = false;
+    this.joystickDir = { x: 0, y: 0 };
+    this.joystickMag = 0;
+    this.joystickKnobX = 0;
+    this.joystickKnobY = 0;
+    this.joystickTouchId = null;
     if (this.gameMode === 'challenge') {
       this.challengeGoal = 0;
       this.generateGoal();
@@ -1664,6 +1736,7 @@ class Game {
     this.sessionKills = 47;
     this.wave = 8;
     UNIT = SIZE * .45;
+    this.pushDebugData();
     this.state = 'victoryscreen';
     this.draw();
   }
@@ -2333,7 +2406,23 @@ class Game {
       if (this.survivalTime > 180) this.difficulty += (this.survivalTime - 180) * 0.025;
     }
 
+    // Joystick — set velocity (leveraged by egg physics for smooth feel)
+    if (this.joystickActive && !this.isCharging && !this.chargeActive && !this.isJumping) {
+      const targetV = 8 * this.egg.speedMult * this.joystickMag;
+      this.egg.vel.x = this.joystickDir.x * targetV;
+      this.egg.vel.y = this.joystickDir.y * targetV;
+    }
+
     this.egg.update(dt);
+
+    // Boundary clamp with bounce
+    if (this.joystickActive) {
+      const m = PLATE_MARGIN + this.egg.r;
+      if (this.egg.pos.x < m) { this.egg.pos.x = m; this.egg.vel.x *= -0.4; }
+      if (this.egg.pos.x > CW - m) { this.egg.pos.x = CW - m; this.egg.vel.x *= -0.4; }
+      if (this.egg.pos.y < m) { this.egg.pos.y = m; this.egg.vel.y *= -0.4; }
+      if (this.egg.pos.y > CH - m) { this.egg.pos.y = CH - m; this.egg.vel.y *= -0.4; }
+    }
 
     // === Dash after-movement ===
     if (this.dashTimer > 0) {
@@ -2765,6 +2854,8 @@ class Game {
 
   triggerVictory() {
     this.goalReached = true;
+    this.survivalHistory.push(Math.floor(this.survivalTime));
+    if (this.survivalHistory.length > 50) this.survivalHistory.shift();
     this.state = 'victory';
     this.victoryState = 'incoming';
     this.victoryTimer = 600;
@@ -2920,7 +3011,7 @@ class Game {
       if (this.reinforcements.every(r => r.phase === 'done')) {
         if (this.victoryExitTimer === 0) this.victoryExitTimer = 30;
         this.victoryExitTimer--;
-        if (this.victoryExitTimer <= 0) this.state = 'victoryscreen';
+        if (this.victoryExitTimer <= 0) { this.pushDebugData(); this.state = 'victoryscreen'; }
       }
     } else {
       // Phase 4: 胜利完成 → 继续处理剩余蛋，结束后跳转
@@ -2970,11 +3061,12 @@ class Game {
         }
       }
       if (this.victoryTimer <= 0) {
+        this.pushDebugData();
         this.state = 'victoryscreen';
       } else if (this.reinforcements.every(r => r.phase === 'done')) {
         if (this.victoryExitTimer === 0) this.victoryExitTimer = 30;
         this.victoryExitTimer--;
-        if (this.victoryExitTimer <= 0) this.state = 'victoryscreen';
+        if (this.victoryExitTimer <= 0) { this.pushDebugData(); this.state = 'victoryscreen'; }
       }
     }
   }
@@ -3718,6 +3810,10 @@ class Game {
     if (this.showTutorial) {
       this.drawTutorial();
     }
+    // Joystick
+    if (this.state === 'playing' && !this.showTutorial && this.joystickEnabled) {
+      this.drawJoystick();
+    }
     // Debug overlay
     if (DEBUG && this.debugInfo.showDebug && (this.state === 'playing' || this.state === 'victory')) {
       const lines = [
@@ -3813,6 +3909,15 @@ class Game {
     ctx.fillStyle = this.debugInfo.showDebug ? '#fff' : '#999';
     ctx.font = `${SIZE * .03}px Arial`;
     ctx.fillText('🕵️', debugX + toggleSize / 2, toggleY + toggleSize / 2);
+    // Joystick toggle
+    const joyX = debugX + toggleSize + togglePad * .5;
+    ctx.fillStyle = this.joystickEnabled ? '#81c784' : '#e0e0e0';
+    ctx.beginPath();
+    ctx.roundRect(joyX, toggleY, toggleSize, toggleSize, 6);
+    ctx.fill();
+    ctx.fillStyle = this.joystickEnabled ? '#fff' : '#999';
+    ctx.font = `${SIZE * .03}px Arial`;
+    ctx.fillText('🎮', joyX + toggleSize / 2, toggleY + toggleSize / 2);
     ctx.textBaseline = 'alphabetic';
 
     // Egg skin preview
@@ -3920,7 +4025,7 @@ class Game {
     ctx.fillStyle = '#546e7a';
     ctx.font = `${SIZE * .024}px Arial`;
     ctx.textAlign = 'center';
-    ctx.fillText('📥 下载调试数据', CX, dbgY);
+    ctx.fillText('📥 导出调试数据', CX, dbgY);
   }
 
   drawVictoryScreen() {
@@ -4180,7 +4285,7 @@ class Game {
     ctx.fillStyle = '#90a4ae';
     ctx.font = `${cardH * .024}px Arial`;
     ctx.textAlign = 'center';
-    ctx.fillText('📥 下载调试数据', CX, dbgOutY);
+    ctx.fillText('📥 导出调试数据', CX, dbgOutY);
     // === Footer ===
     const fLineY = cardY + cardH * .92;
     ctx.strokeStyle = 'rgba(200,200,200,.4)';
@@ -4202,14 +4307,46 @@ class Game {
     else if (/mac/i.test(ua)) platform = 'macos';
     else if (/linux/i.test(ua)) platform = 'linux';
     let browser = 'unknown';
-    if (/edg/i.test(ua)) browser = 'edge';
+    if (/micromessenger/i.test(ua)) browser = 'wechat';
+    else if (/edg/i.test(ua)) browser = 'edge';
     else if (/chrome/i.test(ua) && !/edg/i.test(ua)) browser = 'chrome';
-    else if (/safari/i.test(ua) && !/chrome/i.test(ua)) browser = 'safari';
+    else if (/safari/i.test(ua) && !/chrome/i.test(ua) && !/edg/i.test(ua) && !/micromessenger/i.test(ua)) browser = 'safari';
     else if (/firefox/i.test(ua)) browser = 'firefox';
+    else if (/crios/i.test(ua)) browser = 'chrome';
+    else if (/fxios/i.test(ua)) browser = 'firefox';
     const isMobile = /mobile|android|iphone|ipad|ipod/i.test(ua);
     const screenW = Math.max(document.documentElement.clientWidth || 0, window.innerWidth || 0);
     const screenH = Math.max(document.documentElement.clientHeight || 0, window.innerHeight || 0);
     return { platform, browser, isMobile, userAgent: ua, screenWidth: screenW, screenHeight: screenH };
+  }
+
+  pushDebugData() {
+    const sys = this.getSystemInfo();
+    const r = this.debugInfo.record;
+    const artTypes = this._artifactTypes || [];
+    const artTotalW = artTypes.reduce((s, t) => s + t.weight, 0);
+    const summary = r.length > 0 ? {
+      survivalTime: this.survivalTime,
+      frames: r.length,
+      avgDt: (r.reduce((s, f) => s + f.dt, 0) / r.length).toFixed(3),
+      avgFps: r.length > 0 ? r[r.length - 1].fps : 0,
+      tomatoesKilled: this.sessionKills,
+      goldEarned: this.gold,
+      jumps: r.filter(f => f.jumping).length,
+      avgVel: (r.reduce((s, f) => s + Math.abs(f.vx) + Math.abs(f.vy), 0) / r.length).toFixed(1),
+      artifactWeights: Object.fromEntries(artTypes.map(t => [t.label, { w: t.weight, pct: artTotalW > 0 ? (t.weight / artTotalW * 100).toFixed(1) + '%' : '0%' }])),
+    } : { survivalTime: this.survivalTime, gold: this.gold, kills: this.sessionKills };
+    const gameState = {
+      gold: this.gold, skinPoints: this.skinPoints, currentSkin: this.currentSkin,
+      wave: this.wave, difficulty: this.difficulty,
+      survivalTime: this.survivalTime, hp: this.egg?.hp, maxHp: this.egg?.maxHp,
+      state: this.state, gameMode: this.gameMode,
+      comboCount: this.comboCount, maxCombo: this.maxCombo
+    };
+    const data = { system: sys, summary, gameState, frames: r.slice(-300), errors: this.debugInfo.errors, audioLog: this.debugInfo.audioLog, ts: Date.now() };
+    try {
+      fetch('/api/debug', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }).catch(() => {});
+    } catch(e) {}
   }
 
   downloadDebugData() {
@@ -4316,6 +4453,9 @@ class Game {
   }
 
   gameOver() {
+    this.pushDebugData();
+    this.survivalHistory.push(Math.floor(this.survivalTime));
+    if (this.survivalHistory.length > 50) this.survivalHistory.shift();
     this.state = 'gameover';
     SFX.stopBGM();
     SFX.gameOver();
@@ -4816,6 +4956,7 @@ class Game {
       this.bonusHp = 0;
       this.gold = 0;
       this.claimedMilestones = [];
+      this.survivalHistory = [];
       // Also clear server save file
       try { fetch('/api/save', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }).catch(() => {}); } catch(e) {}
     }
@@ -4855,6 +4996,13 @@ class Game {
       }
       if (x > debugX && x < debugX + toggleSize && y > toggleY && y < toggleY + toggleSize) {
         this.debugInfo.showDebug = !this.debugInfo.showDebug;
+        this.saveSettings();
+        this.draw();
+        return;
+      }
+      const joyX = debugX + toggleSize + togglePad * .5;
+      if (x > joyX && x < joyX + toggleSize && y > toggleY && y < toggleY + toggleSize) {
+        this.joystickEnabled = !this.joystickEnabled;
         this.saveSettings();
         this.draw();
         return;
@@ -5250,6 +5398,10 @@ class Game {
   }
 }
 
+function calcJoystickMag(rawMag) {
+  return Math.min(1, Math.max(0, rawMag));
+}
+
 function handleTouchStart(e) {
   e.preventDefault();
   const t = e.touches[0];
@@ -5263,6 +5415,29 @@ function handleTouchStart(e) {
     const rect = canvas.getBoundingClientRect();
     const x = (t.clientX - rect.left) / rect.width * CW;
     const y = (t.clientY - rect.top) / rect.height * CH;
+    // Joystick check
+    if (game.joystickEnabled) {
+      const jcX = CW - SIZE * .28;
+      const jcY = CH - SIZE * .28;
+      const touchDist = Math.hypot(x - jcX, y - jcY);
+      if (touchDist < SIZE * .35) {
+        game.joystickActive = true;
+        game.joystickTouchId = touchId;
+        const dx = x - jcX, dy = y - jcY;
+        const len = Math.hypot(dx, dy);
+        const maxR = SIZE * .14;
+        const clamp = Math.min(len, maxR);
+        const nx = len > 0 ? dx / len : 0;
+        const ny = len > 0 ? dy / len : 0;
+        game.joystickDir = { x: nx, y: ny };
+        game.joystickMag = calcJoystickMag(clamp / maxR);
+        game.joystickKnobX = jcX + nx * clamp;
+        game.joystickKnobY = jcY + ny * clamp;
+        game.egg.target = null;
+        game.egg.vel = new Vec2();
+        return;
+      }
+    }
     game.mouseX = x; game.mouseY = y;
     const doubleTapDist = Math.hypot(x - game.lastTapX, y - game.lastTapY);
     game.lastTapX = x; game.lastTapY = y;
@@ -5315,6 +5490,23 @@ function handleTouchMove(e) {
       const x = (t.clientX - rect.left) / rect.width * CW;
       const y = (t.clientY - rect.top) / rect.height * CH;
       if (game && game.state === 'playing' && !game.showTutorial) {
+        // Joystick drag
+        if (game.joystickActive) {
+          const jcX = CW - SIZE * .28;
+          const jcY = CH - SIZE * .28;
+          const dx = x - jcX, dy = y - jcY;
+          const len = Math.hypot(dx, dy);
+          const maxR = SIZE * .14;
+          const clamp = Math.min(len, maxR);
+          const nx = len > 0 ? dx / len : 0;
+          const ny = len > 0 ? dy / len : 0;
+        game.joystickDir = { x: nx, y: ny };
+        game.joystickMag = calcJoystickMag(clamp / maxR);
+        game.joystickKnobX = jcX + nx * clamp;
+          game.joystickKnobY = jcY + ny * clamp;
+          game.egg.target = null;
+          break;
+        }
         game.mouseX = x; game.mouseY = y;
         if (game.chargeActive || game.isCharging || game.isJumping) {
           // Don't move egg during charge or jump
@@ -5336,6 +5528,13 @@ function handleTouchEnd(e) {
       const y = (t.clientY - rect.top) / rect.height * CH;
       if (game.state === 'playing') {
         if (game.showTutorial) return;
+        if (game.joystickActive) {
+          game.joystickActive = false;
+          game.joystickDir = { x: 0, y: 0 };
+          game.joystickMag = 0;
+          game.joystickTouchId = null;
+          return;
+        }
         if (game.pendingDashRelease) {
           game.pendingDashRelease = false;
           game.isCharging = false;
@@ -5377,6 +5576,29 @@ canvas.addEventListener('mousedown', e => {
   if (game && game.state === 'playing') {
     if (game.showTutorial) { game.handleClick(0, 0); e.preventDefault(); return; }
     if (game.isJumping) { e.preventDefault(); return; }
+    // Joystick check (mouse)
+    if (game.joystickEnabled) {
+      const jcX = CW - SIZE * .28;
+      const jcY = CH - SIZE * .28;
+      const touchDist = Math.hypot(x - jcX, y - jcY);
+      if (touchDist < SIZE * .35) {
+        game.joystickActive = true;
+        const dx = x - jcX, dy = y - jcY;
+        const len = Math.hypot(dx, dy);
+        const maxR = SIZE * .14;
+        const clamp = Math.min(len, maxR);
+        const nx = len > 0 ? dx / len : 0;
+        const ny = len > 0 ? dy / len : 0;
+        game.joystickDir = { x: nx, y: ny };
+        game.joystickMag = calcJoystickMag(clamp / maxR);
+        game.joystickKnobX = jcX + nx * clamp;
+        game.joystickKnobY = jcY + ny * clamp;
+        game.egg.target = null;
+        game.egg.vel = new Vec2();
+        e.preventDefault();
+        return;
+      }
+    }
     game.mouseX = x; game.mouseY = y;
     const doubleTapDist = Math.hypot(x - game.lastTapX, y - game.lastTapY);
     game.lastTapX = x; game.lastTapY = y;
@@ -5433,7 +5655,21 @@ canvas.addEventListener('mousemove', e => {
   if (game) { game.mouseX = x; game.mouseY = y; }
   if (e.buttons & 1 && game && game.state === 'playing') {
     if (game.showTutorial) return;
-    if (game.chargeActive || game.isCharging || game.isJumping) {
+    if (game.joystickActive) {
+      const jcX = CW - SIZE * .28;
+      const jcY = CH - SIZE * .28;
+      const dx = x - jcX, dy = y - jcY;
+      const len = Math.hypot(dx, dy);
+      const maxR = SIZE * .14;
+      const clamp = Math.min(len, maxR);
+      const nx = len > 0 ? dx / len : 0;
+      const ny = len > 0 ? dy / len : 0;
+      game.joystickDir = { x: nx, y: ny };
+      game.joystickMag = calcJoystickMag(clamp / maxR);
+      game.joystickKnobX = jcX + nx * clamp;
+      game.joystickKnobY = jcY + ny * clamp;
+      game.egg.target = null;
+    } else if (game.chargeActive || game.isCharging || game.isJumping) {
       // Don't move egg during charge or jump
     } else {
       game.egg.moveTo(x, y);
@@ -5448,6 +5684,12 @@ function handleMouseUp(e) {
   if (game) { game.mouseX = x; game.mouseY = y; }
   if (game && game.state === 'playing') {
     if (game.showTutorial) return;
+    if (game.joystickActive) {
+      game.joystickActive = false;
+      game.joystickDir = { x: 0, y: 0 };
+      game.joystickMag = 0;
+      return;
+    }
     if (game.pendingDashRelease) {
       game.pendingDashRelease = false;
       game.isCharging = false;
@@ -5506,6 +5748,10 @@ function gameLoop(time) {
             ? (game.tomatoes.reduce((s, t) => s + t.vel.len(), 0) / game.tomatoes.length).toFixed(1)
             : '0',
           gold: game.gold,
+          jActive: game.joystickActive,
+          jDirX: game.joystickDir.x,
+          jDirY: game.joystickDir.y,
+          jMag: game.joystickMag,
         });
         if (game.debugInfo.record.length > 900) game.debugInfo.record.shift();
       }
