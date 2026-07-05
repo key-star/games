@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<title>2048</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; user-select: none; }
+body { background: #faf8ef; font-family: Arial, sans-serif; display: flex; justify-content: center; padding-top: 40px; touch-action: none; }
+.container { width: 500px; max-width: 94vw; }
+.header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+h1 { font-size: 64px; font-weight: bold; color: #776e65; }
+.score-box { background: #bbada0; color: #fff; padding: 8px 20px; border-radius: 6px; text-align: center; }
+.score-box .label { font-size: 12px; text-transform: uppercase; }
+.score-box .value { font-size: 22px; font-weight: bold; }
+.btn { background: #8f7a66; color: #fff; border: none; padding: 10px 20px; border-radius: 6px; font-size: 16px; cursor: pointer; }
+.btn:active { background: #9f8b76; }
+.grid-bg { background: #bbada0; border-radius: 8px; padding: 8px; display: grid; gap: 8px; grid-template-columns: repeat(4, 1fr); grid-template-rows: repeat(4, 1fr); aspect-ratio: 1; }
+.tile { background: #cdc1b4; border-radius: 6px; display: flex; align-items: center; justify-content: center; font-size: 40px; font-weight: bold; color: #776e65; overflow: hidden; width: 100%; height: 100%; }
+.tile[data-v="2"]    { background: #eee4da; }
+.tile[data-v="4"]    { background: #ede0c8; }
+.tile[data-v="8"]    { background: #f2b179; color: #f9f6f2; }
+.tile[data-v="16"]   { background: #f59563; color: #f9f6f2; }
+.tile[data-v="32"]   { background: #f67c5f; color: #f9f6f2; }
+.tile[data-v="64"]   { background: #f65e3b; color: #f9f6f2; }
+.tile[data-v="128"]  { background: #edcf72; color: #f9f6f2; font-size: 34px; }
+.tile[data-v="256"]  { background: #edcc61; color: #f9f6f2; font-size: 34px; }
+.tile[data-v="512"]  { background: #edc850; color: #f9f6f2; font-size: 34px; }
+.tile[data-v="1024"] { background: #edc53f; color: #f9f6f2; font-size: 28px; }
+.tile[data-v="2048"] { background: #edc22e; color: #f9f6f2; font-size: 28px; }
+.above-game { display: flex; justify-content: space-between; align-items: center; margin: 12px 0; }
+.game-intro { font-size: 15px; color: #776e65; line-height: 1.4; }
+.game-container { position: relative; }
+.msg {
+  display: none; position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(238,228,218,0.6); border-radius: 8px; z-index: 100;
+  flex-direction: column; align-items: center; justify-content: center; gap: 20px;
+}
+.msg.show { display: flex; }
+.msg p { font-size: 44px; font-weight: bold; color: #776e65; margin: 0; }
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="header">
+    <h1>2048</h1>
+    <div class="score-box">
+      <div class="label">分数</div>
+      <div class="value" id="score">0</div>
+    </div>
+  </div>
+  <div class="above-game">
+    <p class="game-intro">滑动方块，合成 <strong>2048!</strong></p>
+    <button class="btn" onclick="startGame()">重新开始</button>
+  </div>
+  <div class="game-container">
+    <div class="grid-bg" id="grid"></div>
+    <div class="msg" id="msg"><p></p></div>
+  </div>
+  <div class="restart-wrap" id="restartWrap"></div>
+</div>
+<script>
+const SIZE = 4;
+let grid = [], score = 0, over = false;
+const gridEl = document.getElementById('grid');
+const scoreEl = document.getElementById('score');
+const msgEl = document.getElementById('msg');
+
+function initGrid() {
+  grid = Array.from({length: SIZE}, () => Array(SIZE).fill(0));
+  score = 0; over = false;
+  spawn(); spawn();
+  render();
+}
+
+function saveState() {
+  localStorage.setItem('game2048', JSON.stringify({ grid, score, over }));
+}
+
+function loadState() {
+  const raw = localStorage.getItem('game2048');
+  if (!raw) return false;
+  try {
+    const data = JSON.parse(raw);
+    if (data.grid && data.grid.length === SIZE) {
+      grid = data.grid; score = data.score; over = data.over;
+      render();
+      if (over) checkGameOver();
+      return true;
+    }
+  } catch {}
+  return false;
+}
+
+function spawn() {
+  const empty = [];
+  for (let r = 0; r < SIZE; r++)
+    for (let c = 0; c < SIZE; c++)
+      if (!grid[r][c]) empty.push([r, c]);
+  if (!empty.length) return false;
+  const [r, c] = empty[Math.random() * empty.length | 0];
+  grid[r][c] = Math.random() < .9 ? 2 : 4;
+  return true;
+}
+
+function slide(row) {
+  const arr = row.filter(v => v);
+  for (let i = 0; i < arr.length - 1; i++) {
+    if (arr[i] === arr[i + 1]) {
+      arr[i] *= 2;
+      score += arr[i];
+      arr.splice(i + 1, 1);
+    }
+  }
+  while (arr.length < SIZE) arr.push(0);
+  return arr;
+}
+
+function move(d) {
+  if (over) return;
+  const old = grid.map(r => [...r]);
+  if (d === 0) grid = grid.map(r => slide(r));              // left
+  if (d === 1) grid = grid.map(r => slide([...r].reverse())).map(r => r.reverse()); // right
+  if (d === 2) grid = transpose(transpose(grid).map(c => slide([...c]))); // up
+  if (d === 3) grid = transpose(transpose(grid).map(c => slide([...c].reverse()).reverse())); // down
+
+  const changed = grid.some((r, i) => r.some((v, j) => v !== old[i][j]));
+  if (!changed) return;
+  spawn();
+  render();
+  checkGameOver();
+}
+
+function transpose(m) { return m[0].map((_, i) => m.map(r => r[i])); }
+
+function showMsg(text) {
+  msgEl.querySelector('p').textContent = text;
+  msgEl.classList.add('show');
+  const wrap = document.getElementById('restartWrap');
+  wrap.innerHTML = '<div style="text-align:center;margin-top:16px"><button class="btn" onclick="startGame()">再来一局</button></div>';
+}
+
+function checkGameOver() {
+  if (grid.some(r => r.some(v => v === 2048))) { showMsg('🎉 你赢了！'); over = true; return; }
+  for (let r = 0; r < SIZE; r++)
+    for (let c = 0; c < SIZE; c++) {
+      if (!grid[r][c]) return;
+      if (c < SIZE - 1 && grid[r][c] === grid[r][c + 1]) return;
+      if (r < SIZE - 1 && grid[r][c] === grid[r + 1][c]) return;
+    }
+  showMsg('💀 游戏结束');
+  over = true;
+}
+
+function render() {
+  gridEl.innerHTML = grid.map(row => row.map(v => `<div class="tile" data-v="${v}">${v || ''}</div>`).join('')).join('');
+  scoreEl.textContent = score;
+  saveState();
+}
+
+function startGame() { localStorage.removeItem('game2048'); msgEl.classList.remove('show'); document.getElementById('restartWrap').innerHTML = ''; initGrid(); }
+
+document.addEventListener('keydown', e => {
+  if (e.key.startsWith('Arrow')) { e.preventDefault(); move({ArrowLeft:0,ArrowRight:1,ArrowUp:2,ArrowDown:3}[e.key]); }
+});
+let mouseX, mouseY, mouseDown = false;
+document.addEventListener('mousedown', e => { mouseX = e.clientX; mouseY = e.clientY; mouseDown = true; });
+document.addEventListener('mouseup', e => {
+  if (!mouseDown) return; mouseDown = false;
+  const dx = e.clientX - mouseX, dy = e.clientY - mouseY;
+  const absX = Math.abs(dx), absY = Math.abs(dy);
+  if (Math.max(absX, absY) < 20) return;
+  move(absX > absY ? (dx > 0 ? 1 : 0) : (dy > 0 ? 3 : 2));
+});
+
+let touchX, touchY;
+document.addEventListener('touchstart', e => { e.preventDefault(); touchX = e.touches[0].clientX; touchY = e.touches[0].clientY; });
+document.addEventListener('touchmove', e => { e.preventDefault(); });
+document.addEventListener('touchend', e => {
+  const dx = e.changedTouches[0].clientX - touchX, dy = e.changedTouches[0].clientY - touchY;
+  const absX = Math.abs(dx), absY = Math.abs(dy);
+  if (Math.max(absX, absY) < 20) return;
+  move(absX > absY ? (dx > 0 ? 1 : 0) : (dy > 0 ? 3 : 2));
+});
+
+if (!loadState()) startGame();
+</script>
+</body>
+</html>
