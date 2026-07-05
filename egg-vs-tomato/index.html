@@ -2168,8 +2168,38 @@ class Game {
       { id: 'repulse', icon: '💥', label: '斥力震波', weight: 3 },
       { id: 'tomato_apocalypse', icon: '🍅', label: '番茄末日', weight: 2 },
     ]);
+    const tomatoCount = this.tomatoes.length;
+    const progress = Math.min(1, Math.max(0, (tomatoCount - 3) / 12));
+    const eased = progress <= 0 ? 0 : progress < 1 ? Math.pow(progress, 1.6) : 1;
+    const startWeights = {
+      shield: 24,
+      splash_range: 14,
+      splash_power: 10,
+      fire_shell: 8,
+      gravity: 4,
+      chain_lightning: 18,
+      repulse: 6,
+      tomato_apocalypse: 2,
+    };
+    const fullWeights = {
+      shield: 20,
+      splash_range: 7,
+      splash_power: 4,
+      fire_shell: 18,
+      gravity: 14,
+      chain_lightning: 10,
+      repulse: 12,
+      tomato_apocalypse: 15,
+    };
+    const interp = (start, end) => start + (end - start) * eased;
     // heal weight is dynamic based on HP
     types[0].weight = healWeight;
+    for (let i = 1; i < types.length; i++) {
+      const t = types[i];
+      const startWeight = startWeights[t.id] || 0;
+      const fullWeight = fullWeights[t.id] || 0;
+      t.weight = Math.max(0, interp(startWeight, fullWeight));
+    }
     const totalWeight = types.reduce((s, t) => s + t.weight, 0);
     if (totalWeight <= 0) return;
     let r = Math.random() * totalWeight;
