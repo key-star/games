@@ -733,14 +733,17 @@ const SHOP_BUFFS = [
   { id: 'shield', name: '护盾', icon: '🛡️', desc: '获得3秒护盾', cost: 20 },
 ];
 
-// ───── Sound Manager (Web Audio API, no external files) ─────
+// ───── Sound Manager (Web Audio API + WAV files for BGM/jingles) ─────
 const SFX = {
   _ctx: null,
   _gain: null,
-  _bgmInterval: null,
   _bgmPlaying: false,
-  _comboBasePitch: 523,
+  _bgmBuffer: null,
+  _bgmSource: null,
+  _victoryBuffer: null,
   muted: false,
+  // Debug: toggle BGM layers with Shift+1..4
+  _bgmLayers: { pad: 1, bass: 1, mel: 1, kick: 1 },
   _log(name) {
     if (typeof game !== 'undefined' && game && game.debugInfo) {
       game.debugInfo.audioLog.push({ t: game.survivalTime, s: name });
@@ -752,10 +755,120 @@ const SFX = {
     try {
       this._ctx = new (window.AudioContext || window.webkitAudioContext)();
       this._gain = this._ctx.createGain();
-      this._gain.gain.value = 0.25;
+      const isAndroid = /android/i.test(navigator.userAgent) && !/iphone|ipad|ipod/i.test(navigator.userAgent);
+      this._gain.gain.value = isAndroid ? 0.55 : 0.25;
       this._gain.connect(this._ctx.destination);
       if (this._ctx.state === 'suspended') this._ctx.resume();
-    } catch(e) {}
+      this._buildBGMBuffer();
+      this._buildVictoryBuffer();
+    } catch(e) { console.warn('SFX._init failed:', e); }
+  },
+
+  // Pre-render 8s BGM loop into AudioBuffer (no file deps, always works)
+  _buildBGMBuffer() {
+    const sr = this._ctx.sampleRate;
+    const dur = 8;
+    const n = Math.ceil(sr * dur);
+    const buf = this._ctx.createBuffer(1, n, sr);
+    const d = buf.getChannelData(0);
+    const bpm = 120, beat = 60 / bpm;
+    const nf = (name) => {
+      const c = {C:0,'C#':1,Db:1,D:2,'D#':3,Eb:3,E:4,F:5,'F#':6,Gb:6,G:7,'G#':8,Ab:8,A:9,'A#':10,Bb:10,B:11};
+      const [a, o] = name.length < 3 ? [name[0], +name[1]] : [name.slice(0,2), +name[2]];
+      return 440 * Math.pow(2, (c[a] - 9 + (o - 4) * 12) / 12);
+    };
+    // Chord pads (sine): C, G, Am, F (4 bars, 8 beats each)
+    const chordRoots = [[nf('C3'),nf('E3'),nf('G3')],[nf('G3'),nf('B3'),nf('D4')],[nf('A3'),nf('C4'),nf('E4')],[nf('F3'),nf('A3'),nf('C4')]];
+    // Melody (square): 8 notes per bar
+    const melodies = [
+      [nf('C5'),nf('E5'),nf('G5'),nf('E5'),nf('D5'),nf('C5'),nf('D5'),nf('E5')],
+      [nf('G4'),nf('B4'),nf('D5'),nf('B4'),nf('A4'),nf('G4'),nf('A4'),nf('B4')],
+      [nf('A4'),nf('C5'),nf('E5'),nf('C5'),nf('B4'),nf('A4'),nf('B4'),nf('C5')],
+      [nf('G4'),nf('B4'),nf('D5'),nf('B4'),nf('C5'),nf('D5'),nf('E5'),nf('G5')],
+    ];
+    for (let i = 0; i < n; i++) {
+      const t = i / sr;
+      const bar = Math.floor(t / (beat * 4)) % 4;
+      const beatInBar = (t % (beat * 4)) / beat;
+      const noteIdx = Math.floor(beatInBar * 2) % 8;
+      // Pad (warm sine)
+      const chord = chordRoots[bar];
+      let s = 0;
+      if (this._bgmLayers.pad) {
+        for (let k = 0; k < 3; k++) s += 0.06 * Math.sin(2 * Math.PI * chord[k] * t);
+        s += 0.04 * Math.sin(2 * Math.PI * chord[0] * 2 * t);
+      }
+      // Bass (square, root every 2 beats)
+      if (this._bgmLayers.bass) {
+        const bassFreq = chord[0] / 2;
+        const bPhase = (t * bassFreq) % 1;
+        s += 0.08 * (bPhase < 0.5 ? 1 : -1) * Math.max(0, 1 - (t % beat) / beat);
+      }
+      // Melody (quiet sine, soft envelope — no harshness)
+      if (this._bgmLayers.mel) {
+        const melFreq = melodies[bar][noteIdx];
+        const notePhase = (t % (beat / 2)) / (beat / 2);
+        const melEnv = Math.max(0, 1 - notePhase) * Math.min(1, notePhase * 8);
+        s += 0.03 * Math.sin(2 * Math.PI * melFreq * t) * melEnv;
+      }
+      // Kick on beats 1 & 3 (proper freq sweep: 200→30Hz, phase-integral, no artifact)
+      if (this._bgmLayers.kick && ((beatInBar % 4) < 1 || ((beatInBar % 4) >= 2 && (beatInBar % 4) < 3))) {
+        const kickT = (t % beat) / beat;
+        if (kickT < 0.18) {
+          const localT = t % beat;
+          // phase = ∫freq dt with freq(t)=200*exp(-20*t)
+          // integral = 200/20 * (1-exp(-20*t)) = 10*(1-exp(-20*t))
+          const phase = 2 * Math.PI * 10 * (1 - Math.exp(-20 * localT));
+          const env = Math.max(0, 1 - kickT / 0.18);
+          s += 0.18 * Math.sin(phase) * env;
+        }
+      }
+      d[i] = Math.max(-1, Math.min(1, s));
+    }
+    this._bgmBuffer = buf;
+  },
+
+  // Pre-render victory jingle (ascending arpeggio, ~1.5s)
+  _buildVictoryBuffer() {
+    const sr = this._ctx.sampleRate, dur = 1.8;
+    const n = Math.ceil(sr * dur);
+    const buf = this._ctx.createBuffer(1, n, sr);
+    const d = buf.getChannelData(0);
+    const notes = [
+      [0, 0.3, 262], [0.25, 0.3, 330], [0.5, 0.3, 392], [0.75, 0.3, 523], [1.0, 0.5, 659],
+    ];
+    for (let i = 0; i < n; i++) {
+      const t = i / sr;
+      let s = 0;
+      for (const [start, dur, freq] of notes) {
+        const localT = t - start;
+        if (localT >= 0 && localT < dur) {
+          const env = Math.max(0, 1 - localT / dur);
+          s += 0.12 * Math.sin(2 * Math.PI * freq * t) * env;
+          s += 0.06 * Math.sin(2 * Math.PI * freq * 2 * t) * env;
+        }
+      }
+      // Final chord (C5+E5+G5 sustained during last note)
+      if (t > 0.95) {
+        const chordT = t - 0.95;
+        const chordDur = 0.85;
+        const chordEnv = Math.max(0, 1 - chordT / chordDur);
+        for (const f of [523, 659, 784]) s += 0.05 * Math.sin(2 * Math.PI * f * t) * chordEnv;
+      }
+      d[i] = Math.max(-1, Math.min(1, s));
+    }
+    this._victoryBuffer = buf;
+  },
+
+  // Debug: toggle a BGM layer by name, rebuild & restart  // Debug: toggle a BGM layer by name, rebuild & restart
+  toggleBGMLayer(name) {
+    if (!this._bgmLayers.hasOwnProperty(name)) return;
+    this._bgmLayers[name] = !this._bgmLayers[name];
+    const wasPlaying = this._bgmPlaying;
+    this.stopBGM();
+    this._buildBGMBuffer();
+    if (wasPlaying) this.startBGM();
+    console.warn('BGM layer', name, '=', this._bgmLayers[name]);
   },
 
   // Simple tone (no sweep)
@@ -763,17 +876,19 @@ const SFX = {
     if (this.muted) return;
     if (!this._ctx) this._init();
     if (!this._ctx) return;
-    const t = this._ctx.currentTime + delay;
-    const osc = this._ctx.createOscillator();
-    const g = this._ctx.createGain();
-    osc.type = type;
-    osc.frequency.setValueAtTime(freq, t);
-    g.gain.setValueAtTime(vol, t);
-    g.gain.exponentialRampToValueAtTime(0.001, t + dur);
-    osc.connect(g);
-    g.connect(this._gain);
-    osc.start(t);
-    osc.stop(t + dur);
+    try {
+      const t = this._ctx.currentTime + delay;
+      const osc = this._ctx.createOscillator();
+      const g = this._ctx.createGain();
+      osc.type = type;
+      osc.frequency.setValueAtTime(freq, t);
+      g.gain.setValueAtTime(vol, t);
+      g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+      osc.connect(g);
+      g.connect(this._gain);
+      osc.start(t);
+      osc.stop(t + dur);
+    } catch(e) { console.warn('_tone err:', e); }
   },
 
   // Tone with frequency sweep start→end
@@ -852,21 +967,23 @@ const SFX = {
   _chime(freq, dur = 0.12, vol = 0.08, delay = 0) {
     if (this.muted) return;
     if (!this._ctx) this._init();
-    const t = this._ctx.currentTime + delay;
-    // Layered sine wave + harmonics for bell-like tone
-    [1, 2.01, 3.02, 4.03].forEach((mult, i) => {
-      const osc = this._ctx.createOscillator();
-      const g = this._ctx.createGain();
-      osc.type = 'sine';
-      osc.frequency.setValueAtTime(freq * mult, t);
-      const hVol = vol * (0.5 / (i + 1));
-      g.gain.setValueAtTime(hVol, t);
-      g.gain.exponentialRampToValueAtTime(0.001, t + dur * (1 + i * 0.3));
-      osc.connect(g);
-      g.connect(this._gain);
-      osc.start(t);
-      osc.stop(t + dur * (1 + i * 0.5));
-    });
+    if (!this._ctx) { console.warn('_chime: no ctx'); return; }
+    try {
+      const t = this._ctx.currentTime + delay;
+      [1, 2.01, 3.02, 4.03].forEach((mult, i) => {
+        const osc = this._ctx.createOscillator();
+        const g = this._ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(freq * mult, t);
+        const hVol = vol * (0.5 / (i + 1));
+        g.gain.setValueAtTime(hVol, t);
+        g.gain.exponentialRampToValueAtTime(0.001, t + dur * (1 + i * 0.3));
+        osc.connect(g);
+        g.connect(this._gain);
+        osc.start(t);
+        osc.stop(t + dur * (1 + i * 0.5));
+      });
+    } catch(e) { console.warn('_chime err:', e); }
   },
 
   // Squish/splat noise (PvZ zombie death style)
@@ -942,14 +1059,19 @@ const SFX = {
     this._noise(0.04, 0.04, 0, 3000);
   },
 
-  // 胜利 - triumphant fanfare (PvZ victory jingle style)
+  // 胜利 - triumphant fanfare (AudioBuffer)
   victory() {
     this._log('victory');
-    [523, 659, 784, 1047].forEach((f, i) => {
-      this._tone(f, 0.3, 'square', 0.04, i * 0.12);
-      this._chime(f, 0.2, 0.05, i * 0.12);
-    });
-    this._tone(131, 0.8, 'triangle', 0.06, 0);
+    if (!this._victoryBuffer) return;
+    try {
+      const src = this._ctx.createBufferSource();
+      src.buffer = this._victoryBuffer;
+      const g = this._ctx.createGain();
+      g.gain.value = 1;
+      src.connect(g);
+      g.connect(this._gain);
+      src.start();
+    } catch(e) { console.warn('victory err:', e); }
   },
 
   // 蓄力拉伸音效 — 每150ms 提示音，噔噔噔的重击感
@@ -987,7 +1109,7 @@ const SFX = {
     this._chime(3000, 0.06, 0.03);
   },
 
-  // 游戏结束 - dramatic descent
+  // 游戏结束 - dramatic descent (native oscillator, same as original)
   gameOver() {
     this._log('gameOver');
     this._tone(350, 0.3, 'sawtooth', 0.08);
@@ -1102,51 +1224,33 @@ const SFX = {
     this._noise(0.05, 0.05, 0, 3500);
   },
 
-  // BGM - lofi chillhop style (C major pentatonic, relaxed)
+  // BGM - pre-rendered AudioBuffer loop through AudioContext (always works)
   startBGM() {
     if (this.muted) return;
     if (!this._ctx) this._init();
-    if (this._bgmPlaying) return;
+    if (this._bgmPlaying) { console.warn('BGM already playing'); return; }
+    if (!this._bgmBuffer) { console.warn('BGM buffer not ready'); return; }
     this._bgmPlaying = true;
-    // Pentatonic melody: C D E G A (261, 293, 329, 392, 440)
-    const melody = [261, 293, 329, 392, 440, 392, 329, 293, 261, 329, 392, 440, 392, 329, 293, 261];
-    const chords = [ // C, Am, F, G
-      [130.8, 261.6, 329.6, 392.0],
-      [110.0, 261.6, 329.6, 440.0],
-      [87.3, 261.6, 349.2, 440.0],
-      [98.0, 261.6, 349.2, 392.0],
-    ];
-    let idx = 0;
-    let chordIdx = 0;
-    const play = () => {
-      if (!this._bgmPlaying) return;
-      const t = this._ctx.currentTime;
-      // Soft bass pad (longer, quiet triangle)
-      const chord = chords[chordIdx % chords.length];
-      chord.forEach(f => {
-        const osc = this._ctx.createOscillator();
-        const g = this._ctx.createGain();
-        osc.type = 'triangle';
-        osc.frequency.setValueAtTime(f, t);
-        g.gain.setValueAtTime(0.015, t);
-        g.gain.exponentialRampToValueAtTime(0.001, t + 0.5);
-        osc.connect(g);
-        g.connect(this._gain);
-        osc.start(t);
-        osc.stop(t + 0.5);
-      });
-      // Melody note (plucky sine)
-      this._tone(melody[idx % melody.length], 0.12, 'sine', 0.025);
-      idx++;
-      if (idx % 4 === 0) chordIdx++;
-      this._bgmInterval = setTimeout(play, 280);
-    };
-    play();
+    try {
+      const src = this._ctx.createBufferSource();
+      src.buffer = this._bgmBuffer;
+      src.loop = true;
+      const isAndroid = /android/i.test(navigator.userAgent) && !/iphone|ipad|ipod/i.test(navigator.userAgent);
+      const g = this._ctx.createGain();
+      g.gain.value = isAndroid ? 0.90 : 0.15; // Android speaker compensation
+      src.connect(g);
+      g.connect(this._gain);
+      src.start();
+      this._bgmSource = src;
+    } catch(e) { console.warn('startBGM err:', e); }
   },
 
   stopBGM() {
     this._bgmPlaying = false;
-    if (this._bgmInterval) { clearTimeout(this._bgmInterval); this._bgmInterval = null; }
+    if (this._bgmSource) {
+      try { this._bgmSource.stop(); } catch(e) {}
+      this._bgmSource = null;
+    }
   },
 };
 
@@ -5945,6 +6049,15 @@ document.addEventListener('keydown', e => {
     if (game) {
       game.dumpDebugData();
       console.log(`💾 已导出 ${game.debugInfo.record.length} 帧数据`);
+    }
+  }
+  // Debug BGM layers: Shift+1=和弦 2=贝斯 3=旋律 4=鼓
+  if (e.code.startsWith('Digit') && !e.ctrlKey && !e.altKey && !e.metaKey) {
+    const idx = +e.code.slice(5) - 1;
+    if (idx >= 0 && idx < 4) {
+      const names = ['pad','bass','mel','kick'];
+      SFX.toggleBGMLayer(names[idx]);
+      e.preventDefault();
     }
     e.preventDefault();
   }
