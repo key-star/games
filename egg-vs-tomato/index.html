@@ -182,7 +182,7 @@ class Egg {
       ctx.translate(-this.pos.x, -bottomY);
     }
     ctx.shadowColor = 'rgba(0,0,0,.15)';
-    ctx.shadowBlur = 8;
+    ctx.shadowBlur = 5;
     ctx.beginPath();
     ctx.ellipse(this.pos.x, this.pos.y, this.r * 1.05, this.r * 1.1, 0, 0, Math.PI * 2);
     ctx.fillStyle = shadow;
@@ -300,7 +300,7 @@ class Egg {
     if (this.target) {
       const diff = this.target.sub(this.pos);
       if (diff.len() > 1) {
-        this.pos = this.pos.add(diff.scale(.35 * this.speedMult * dt));
+        this.pos = this.pos.add(diff.scale(.85 * this.speedMult * dt));
       }
     }
     if (BOUNDARY_MODE === 'circle') {
@@ -400,7 +400,7 @@ class Tomato {
     const c2 = this.type === 'boss' ? '#c1121f' : this.type === 'big' ? '#d32f2f' : isShield ? '#0288d1' : isSplitter ? '#7b1fa2' : isExplosive ? '#d84315' : isSeed ? '#ff6e40' : '#ee5a24';
     ctx.save();
     ctx.shadowColor = 'rgba(0,0,0,.15)';
-    ctx.shadowBlur = 6;
+    ctx.shadowBlur = 4;
     ctx.beginPath();
     ctx.arc(this.pos.x, this.pos.y, this.r, 0, Math.PI * 2);
     ctx.fillStyle = c;
@@ -533,7 +533,7 @@ class Tomato {
       const pulse = Math.sin(Date.now() / 60 + this.burnTimer) * 0.3 + 0.7;
       ctx.save();
       ctx.shadowColor = 'rgba(255,80,0,.5)';
-      ctx.shadowBlur = 15;
+      ctx.shadowBlur = 8;
       ctx.strokeStyle = `rgba(255,${120 + pulse * 80},0,${0.3 + pulse * 0.3})`;
       ctx.lineWidth = 3;
       ctx.beginPath();
@@ -1277,6 +1277,11 @@ class Game {
     this.debugPendingDownload = null;
 
     resizeCanvas();
+    this._bgCanvas = document.createElement('canvas');
+    this._bgCanvas.width = CW;
+    this._bgCanvas.height = CH;
+    this._bgCtx = this._bgCanvas.getContext('2d');
+    this._bgDirty = true;
     UNIT = SIZE * .45;
     BOUNDARY_MODE = 'rect';
     this.defaultUnit = UNIT;
@@ -1301,7 +1306,7 @@ class Game {
     const rh = fs + ph * 2;
     ctx.save();
     ctx.shadowColor = 'rgba(0,0,0,.08)';
-    ctx.shadowBlur = 6;
+    ctx.shadowBlur = 4;
     ctx.fillStyle = bg || 'rgba(255,255,255,.85)';
     ctx.beginPath();
     ctx.roundRect(rx, ry, rw, rh, radius || 6);
@@ -1344,7 +1349,7 @@ class Game {
     const cx = CX, cy = CY;
     ctx.save();
     ctx.shadowColor = 'rgba(0,0,0,.3)';
-    ctx.shadowBlur = 30;
+    ctx.shadowBlur = 15;
     ctx.fillStyle = '#fff';
     ctx.beginPath();
     ctx.roundRect(cx - cardW / 2, cy - cardH / 2, cardW, cardH, 16);
@@ -1421,7 +1426,7 @@ class Game {
     const fs = fontSize || SIZE * .045;
     ctx.save();
     ctx.shadowColor = hovered ? 'rgba(129,199,132,.5)' : 'rgba(0,0,0,.1)';
-    ctx.shadowBlur = hovered ? 16 : 8;
+    ctx.shadowBlur = hovered ? 10 : 5;
     ctx.fillStyle = fb;
     ctx.beginPath();
     ctx.roundRect(x, y, w, h, radius || 10);
@@ -3113,6 +3118,30 @@ class Game {
     this.particles.length = writeIdx;
   }
 
+  _buildBgCache() {
+    const bc = this._bgCtx;
+    bc.clearRect(0, 0, CW, CH);
+    bc.shadowColor = 'rgba(0,0,0,.1)';
+    bc.shadowBlur = 8;
+    const pw = CW - PLATE_MARGIN * 2, ph = CH - PLATE_MARGIN * 2;
+    bc.beginPath();
+    bc.roundRect(PLATE_MARGIN, PLATE_MARGIN, pw, ph, 14);
+    bc.fillStyle = '#fafffe';
+    bc.fill();
+    bc.shadowBlur = 0;
+    bc.beginPath();
+    bc.roundRect(PLATE_MARGIN, PLATE_MARGIN, pw, ph, 14);
+    bc.strokeStyle = '#c8e6c9';
+    bc.lineWidth = 3;
+    bc.stroke();
+    bc.beginPath();
+    bc.roundRect(PLATE_MARGIN + 6, PLATE_MARGIN + 6, pw - 12, ph - 12, 10);
+    bc.strokeStyle = '#e8f5e9';
+    bc.lineWidth = 1;
+    bc.stroke();
+    this._bgDirty = false;
+  }
+
   draw() {
     ctx.clearRect(0, 0, CW, CH);
     if (this.state === 'menu') { this.drawMenu(); this.drawTransitionOverlay(); return; }
@@ -3123,25 +3152,9 @@ class Game {
     ctx.fillStyle = '#f5f5f5';
     ctx.fillRect(0, 0, CW, CH);
 
-    // Draw rectangular boundary (plate)
-    ctx.shadowColor = 'rgba(0,0,0,.1)';
-    ctx.shadowBlur = 15;
-    const pw = CW - PLATE_MARGIN * 2, ph = CH - PLATE_MARGIN * 2;
-    ctx.beginPath();
-    ctx.roundRect(PLATE_MARGIN, PLATE_MARGIN, pw, ph, 14);
-    ctx.fillStyle = '#fafffe';
-    ctx.fill();
-    ctx.shadowBlur = 0;
-    ctx.beginPath();
-    ctx.roundRect(PLATE_MARGIN, PLATE_MARGIN, pw, ph, 14);
-    ctx.strokeStyle = '#c8e6c9';
-    ctx.lineWidth = 3;
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.roundRect(PLATE_MARGIN + 6, PLATE_MARGIN + 6, pw - 12, ph - 12, 10);
-    ctx.strokeStyle = '#e8f5e9';
-    ctx.lineWidth = 1;
-    ctx.stroke();
+    // Draw cached background (plate + border)
+    if (this._bgDirty) this._buildBgCache();
+    ctx.drawImage(this._bgCanvas, 0, 0);
 
     // Plate crack overlay
     for (const crack of this.plateCracks) {
@@ -3173,7 +3186,7 @@ class Game {
       const a = Math.min(1, this.shieldTimer / 60) * pulse;
       ctx.save();
       ctx.shadowColor = 'rgba(79,195,247,.6)';
-      ctx.shadowBlur = 20;
+      ctx.shadowBlur = 12;
       ctx.strokeStyle = `rgba(79,195,247,${a * .5})`;
       ctx.lineWidth = 4;
       ctx.beginPath();
@@ -3200,13 +3213,13 @@ class Game {
       const pulse = Math.sin(Date.now() / 50) * 0.3 + 0.7;
       ctx.save();
       ctx.shadowColor = 'rgba(255,80,0,.7)';
-      ctx.shadowBlur = 30;
+      ctx.shadowBlur = 15;
       ctx.strokeStyle = `rgba(255,${Math.floor(120 + pulse * 100)},0,${0.4 + pulse * 0.4})`;
       ctx.lineWidth = 4;
       ctx.beginPath();
       ctx.arc(this.egg.pos.x, this.egg.pos.y, this.egg.r * 1.6, 0, Math.PI * 2);
       ctx.stroke();
-      ctx.shadowBlur = 40;
+      ctx.shadowBlur = 20;
       ctx.strokeStyle = `rgba(255,${Math.floor(200 + pulse * 55)},0,${0.2 + pulse * 0.2})`;
       ctx.lineWidth = 6;
       ctx.beginPath();
@@ -3227,7 +3240,7 @@ class Game {
       const remain = Math.ceil(this.fireShellTimer / 60);
       ctx.save();
       ctx.shadowColor = 'rgba(255,80,0,0.8)';
-      ctx.shadowBlur = 20;
+      ctx.shadowBlur = 10;
       ctx.fillStyle = '#ff6f00';
       ctx.font = `bold ${SIZE * .045}px Arial`;
       ctx.textAlign = 'center';
@@ -3241,7 +3254,7 @@ class Game {
       const a = this.repulseRing.alpha;
       ctx.save();
       ctx.shadowColor = `rgba(255,255,255,${a * 0.5})`;
-      ctx.shadowBlur = 20;
+      ctx.shadowBlur = 12;
       ctx.strokeStyle = `rgba(255,255,255,${a * 0.6})`;
       ctx.lineWidth = 3 * a + 1;
       ctx.beginPath();
@@ -3303,7 +3316,7 @@ class Game {
       const barR = this.egg.r * 2;
       const barColor = charge > 0.7 ? '#81c784' : charge > 0.3 ? '#ffd54f' : '#ef5350';
       ctx.shadowColor = barColor;
-      ctx.shadowBlur = 8;
+      ctx.shadowBlur = 5;
       ctx.strokeStyle = barColor;
       ctx.lineWidth = 3;
       ctx.beginPath();
@@ -3335,7 +3348,7 @@ class Game {
             ctx.save();
             // Thick cartoon trajectory line (solid, rounded caps, glow)
             ctx.shadowColor = color;
-            ctx.shadowBlur = 12;
+            ctx.shadowBlur = 8;
             ctx.strokeStyle = `rgba(255,255,200,${0.4 + charge * 0.4})`;
             ctx.lineWidth = 5;
             ctx.lineCap = 'round';
@@ -3375,8 +3388,8 @@ class Game {
             ctx.restore();
             // Landing point indicator (egg-shaped shadow + crosshair)
             ctx.save();
-            ctx.shadowColor = 'rgba(0,0,0,0.3)';
-            ctx.shadowBlur = 8;
+      ctx.shadowColor = 'rgba(0,0,0,0.3)';
+      ctx.shadowBlur = 5;
             ctx.fillStyle = `rgba(255,255,200,${0.15 + charge * 0.15})`;
             ctx.beginPath();
             ctx.ellipse(lx, ly + this.egg.r * 0.3, this.egg.r * 0.8, this.egg.r * 0.4, 0, 0, Math.PI * 2);
@@ -3439,14 +3452,38 @@ class Game {
       ctx.ellipse(sx, sy, this.egg.r * 0.6, this.egg.r * 0.3, 0, 0, Math.PI * 2);
       ctx.fill();
     }
-    for (let p of this.particles) p.draw();
+    // Batch particles by color to reduce fillStyle changes
+    const pLen = this.particles.length;
+    if (pLen > 0) {
+      const pMap = {};
+      for (let i = 0; i < pLen; i++) {
+        const p = this.particles[i];
+        if (p.glow) { p.draw(); continue; }
+        const c = p.color;
+        if (!pMap[c]) pMap[c] = [];
+        pMap[c].push(p);
+      }
+      for (const c in pMap) {
+        const list = pMap[c];
+        ctx.fillStyle = c;
+        for (let j = 0; j < list.length; j++) {
+          const p = list[j];
+          const a = p.life / p.maxLife;
+          ctx.globalAlpha = a;
+          ctx.beginPath();
+          ctx.arc(p.pos.x, p.pos.y, p.r * a, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+      ctx.globalAlpha = 1;
+    }
 
     // Lightning bolts
     for (const bolt of this.lightningBolts) {
       const alpha = Math.min(1, bolt.timer / 10);
       ctx.save();
       ctx.shadowColor = 'rgba(255,235,59,.8)';
-      ctx.shadowBlur = 15;
+      ctx.shadowBlur = 10;
       ctx.strokeStyle = `rgba(255,255,200,${alpha})`;
       ctx.lineWidth = 2.5;
       for (let i = 0; i < bolt.points.length - 1; i++) {
@@ -3466,7 +3503,7 @@ class Game {
           px = bx; py = by;
         }
       }
-      ctx.shadowBlur = 30;
+      ctx.shadowBlur = 15;
       ctx.strokeStyle = `rgba(255,255,255,${alpha * 0.6})`;
       ctx.lineWidth = 1;
       for (let i = 0; i < bolt.points.length - 1; i++) {
@@ -3484,7 +3521,7 @@ class Game {
       const ay = a.y + bob;
       ctx.save();
       ctx.shadowColor = 'rgba(255,215,0,.6)';
-      ctx.shadowBlur = 20;
+      ctx.shadowBlur = 12;
       ctx.fillStyle = '#fff8e1';
       ctx.beginPath();
       ctx.arc(a.x, ay, a.r + 4, 0, Math.PI * 2);
@@ -3511,9 +3548,9 @@ class Game {
       ctx.fillStyle = '#ffd700';
       ctx.font = `bold ${SIZE * .03}px Arial`;
       ctx.textAlign = 'center';
-      ctx.shadowColor = 'rgba(0,0,0,.3)';
-      ctx.shadowBlur = 4;
-      ctx.fillText(p.text, p.x, p.y);
+    ctx.shadowColor = 'rgba(0,0,0,.3)';
+    ctx.shadowBlur = 3;
+    ctx.fillText(p.text, p.x, p.y);
       ctx.restore();
     }
 
@@ -3524,7 +3561,7 @@ class Game {
       const shadow = r.shadowColor;
       const sz = EGG_R;
       ctx.shadowColor = 'rgba(0,0,0,.15)';
-      ctx.shadowBlur = 6;
+      ctx.shadowBlur = 4;
       ctx.beginPath();
       ctx.ellipse(r.pos.x, r.pos.y, sz * 1.05, sz * 1.1, 0, 0, Math.PI * 2);
       ctx.fillStyle = shadow;
@@ -3646,7 +3683,7 @@ class Game {
     const hpX = SIZE * .06, hpY = SIZE * .06;
     ctx.save();
     ctx.shadowColor = 'rgba(0,0,0,.08)';
-    ctx.shadowBlur = 3;
+    ctx.shadowBlur = 2;
     ctx.fillStyle = '#c8e6c9';
     ctx.beginPath();
     ctx.roundRect(hpX, hpY, hpW, hpH, 4);
@@ -3689,7 +3726,7 @@ class Game {
       // Glow dot at tip when close
       if (progress > 0.8 && progress < 1) {
         ctx.shadowColor = color;
-        ctx.shadowBlur = 12;
+        ctx.shadowBlur = 8;
         ctx.fillStyle = color;
         ctx.beginPath();
         ctx.arc(ringX + Math.cos(endAngle) * ringR, ringY + Math.sin(endAngle) * ringR, 3.5, 0, Math.PI * 2);
@@ -4511,7 +4548,7 @@ class Game {
     ctx.fillRect(0, 0, CW, CH);
     const pw = CW - PLATE_MARGIN * 2, ph = CH - PLATE_MARGIN * 2;
     ctx.shadowColor = 'rgba(0,0,0,.1)';
-    ctx.shadowBlur = 15;
+    ctx.shadowBlur = 8;
     ctx.beginPath();
     ctx.roundRect(PLATE_MARGIN, PLATE_MARGIN, pw, ph, 14);
     ctx.fillStyle = '#fafffe';
@@ -5890,6 +5927,9 @@ canvas.addEventListener('mousemove', e => {
 window.addEventListener('resize', () => {
   if (!game) return;
   resizeCanvas();
+  game._bgCanvas.width = CW;
+  game._bgCanvas.height = CH;
+  game._bgDirty = true;
   if (game.egg) game.egg.moveTo(game.egg.pos.x, game.egg.pos.y);
   game.draw();
 });
