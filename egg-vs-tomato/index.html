@@ -760,7 +760,6 @@ const SFX = {
       this._gain.connect(this._ctx.destination);
       if (this._ctx.state === 'suspended') this._ctx.resume();
       this._buildBGMBuffer();
-      this._buildVictoryBuffer();
     } catch(e) { console.warn('SFX._init failed:', e); }
   },
 
@@ -828,37 +827,7 @@ const SFX = {
     this._bgmBuffer = buf;
   },
 
-  // Pre-render victory jingle (ascending arpeggio, ~1.5s)
-  _buildVictoryBuffer() {
-    const sr = this._ctx.sampleRate, dur = 1.8;
-    const n = Math.ceil(sr * dur);
-    const buf = this._ctx.createBuffer(1, n, sr);
-    const d = buf.getChannelData(0);
-    const notes = [
-      [0, 0.3, 262], [0.25, 0.3, 330], [0.5, 0.3, 392], [0.75, 0.3, 523], [1.0, 0.5, 659],
-    ];
-    for (let i = 0; i < n; i++) {
-      const t = i / sr;
-      let s = 0;
-      for (const [start, dur, freq] of notes) {
-        const localT = t - start;
-        if (localT >= 0 && localT < dur) {
-          const env = Math.max(0, 1 - localT / dur);
-          s += 0.12 * Math.sin(2 * Math.PI * freq * t) * env;
-          s += 0.06 * Math.sin(2 * Math.PI * freq * 2 * t) * env;
-        }
-      }
-      // Final chord (C5+E5+G5 sustained during last note)
-      if (t > 0.95) {
-        const chordT = t - 0.95;
-        const chordDur = 0.85;
-        const chordEnv = Math.max(0, 1 - chordT / chordDur);
-        for (const f of [523, 659, 784]) s += 0.05 * Math.sin(2 * Math.PI * f * t) * chordEnv;
-      }
-      d[i] = Math.max(-1, Math.min(1, s));
-    }
-    this._victoryBuffer = buf;
-  },
+
 
   // Debug: toggle a BGM layer by name, rebuild & restart  // Debug: toggle a BGM layer by name, rebuild & restart
   toggleBGMLayer(name) {
@@ -1059,9 +1028,26 @@ const SFX = {
     this._noise(0.04, 0.04, 0, 3000);
   },
 
-  // 胜利 - triumphant fanfare (AudioBuffer)
+  // 胜利 - play victory.wav
   victory() {
     this._log('victory');
+    if (!this._ctx) this._init();
+    if (!this._ctx) return;
+    if (!this._victoryBuffer) {
+      fetch('sounds/victory.wav')
+        .then(r => r.arrayBuffer())
+        .then(buf => this._ctx.decodeAudioData(buf))
+        .then(ab => {
+          this._victoryBuffer = ab;
+          this._playVictoryBuffer();
+        })
+        .catch(() => {});
+      return;
+    }
+    this._playVictoryBuffer();
+  },
+
+  _playVictoryBuffer() {
     if (!this._victoryBuffer) return;
     try {
       const src = this._ctx.createBufferSource();
@@ -1071,7 +1057,7 @@ const SFX = {
       src.connect(g);
       g.connect(this._gain);
       src.start();
-    } catch(e) { console.warn('victory err:', e); }
+    } catch(e) { console.warn('victory play err:', e); }
   },
 
   // 蓄力拉伸音效 — 每150ms 提示音，噔噔噔的重击感
@@ -2757,7 +2743,7 @@ class Game {
             const a = Math.random() * Math.PI * 2;
             this.particles.push(acquireParticle(this.egg.pos.x, this.egg.pos.y, Math.cos(a) * 4, Math.sin(a) * 4, 4, '#4fc3f7', 20));
           }
-        } else if (this.egg.invincible === 30) {
+        } else if (this.egg.invincible > 0) {
           // One-time knockback, no gold
           t.vel = dir.scale(t.type === 'big' ? 4 : 2);
           t.flash = 8;
