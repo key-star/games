@@ -1458,18 +1458,74 @@ const HLRecorder = {
     return Promise.resolve(blob);
   },
 
-  async downloadClip(clip) {
+  downloadClip(clip) {
     if (!clip || !clip.blob) return;
-    const url = URL.createObjectURL(clip.blob);
-    const a = document.createElement('a');
-    a.href = url;
     const ts = new Date(); const fmt = ts.getFullYear() + ('0'+(ts.getMonth()+1)).slice(-2) + ('0'+ts.getDate()).slice(-2) + '_' + ('0'+ts.getHours()).slice(-2) + ('0'+ts.getMinutes()).slice(-2) + ('0'+ts.getSeconds()).slice(-2);
     const mt = (clip.blob.type || '').split(';')[0].split('/')[1] || 'webm';
-    a.download = `highlight_${clip.type}_${fmt}.${mt}`;
-    a.style.display = 'none';
-    document.body.appendChild(a);
-    a.click();
-    setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 2000);
+    const name = `highlight_${clip.type}_${fmt}.${mt}`;
+    this._showClipOverlay(null, '上传中...');
+    (async () => {
+      try {
+        const res = await fetch(`/api/clips?name=${encodeURIComponent(name)}`, { method: 'POST', body: clip.blob });
+        const data = await res.json();
+        if (data.url) { this._showClipOverlay(data.url, null); }
+        else { this._hideClipOverlay(); this._fallbackDownload(clip.blob, name); }
+      } catch(e) { this._hideClipOverlay(); this._fallbackDownload(clip.blob, name); }
+    })();
+  },
+  _clipOverlay: null,
+  _showClipOverlay(url, loadingText) {
+    this._hideClipOverlay();
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,.85);z-index:9999;display:flex;flex-direction:column;align-items:center;justify-content:center;';
+    const close = document.createElement('div');
+    close.textContent = '✕';
+    close.style.cssText = 'position:absolute;top:16px;right:20px;font-size:24px;color:#fff;cursor:pointer;z-index:10000;padding:8px;';
+    close.onclick = () => this._hideClipOverlay();
+    overlay.appendChild(close);
+    if (url) {
+      const v = document.createElement('video');
+      v.controls = true; v.playsinline = true;
+      v.style.cssText = 'max-width:92vw;max-height:60vh;border-radius:8px;background:#000;';
+      v.src = url; v.play().catch(() => {});
+      overlay.appendChild(v);
+      const dl = document.createElement('div');
+      dl.textContent = '保存到手机';
+      dl.style.cssText = 'margin-top:20px;padding:12px 36px;background:#ff6600;color:#fff;border-radius:8px;font-size:16px;cursor:pointer;';
+      dl.onclick = () => { window.open(url + (url.includes('?') ? '&' : '?') + 'dl=1'); };
+      overlay.appendChild(dl);
+    } else {
+      const p = document.createElement('p');
+      p.style.cssText = 'color:#fff;font-size:16px;';
+      p.textContent = loadingText || '处理中...';
+      overlay.appendChild(p);
+    }
+    document.body.appendChild(overlay);
+    this._clipOverlay = overlay;
+  },
+  _hideClipOverlay() {
+    if (this._clipOverlay) { document.body.removeChild(this._clipOverlay); this._clipOverlay = null; }
+  },
+  _fallbackDownload(blob, name) {
+    const url = URL.createObjectURL(blob);
+    this._hideClipOverlay();
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,.85);z-index:9999;display:flex;flex-direction:column;align-items:center;justify-content:center;';
+    const close = document.createElement('div');
+    close.textContent = '✕';
+    close.style.cssText = 'position:absolute;top:16px;right:20px;font-size:24px;color:#fff;cursor:pointer;z-index:10000;padding:8px;';
+    close.onclick = () => { document.body.removeChild(overlay); URL.revokeObjectURL(url); };
+    overlay.appendChild(close);
+    const v = document.createElement('video');
+    v.controls = true; v.playsinline = true;
+    v.style.cssText = 'max-width:92vw;max-height:60vh;border-radius:8px;background:#000;';
+    v.src = url; v.play().catch(() => {});
+    overlay.appendChild(v);
+    const hint = document.createElement('p');
+    hint.style.cssText = 'color:#ff6600;font-size:14px;margin-top:16px;text-align:center;line-height:1.6;';
+    hint.textContent = '无服务器环境无法下载\n请连接服务器后再试';
+    overlay.appendChild(hint);
+    document.body.appendChild(overlay);
   },
 
   playClip(clip) {
@@ -4989,7 +5045,7 @@ class Game {
       ctx.fillStyle = '#fff';
       ctx.font = `bold ${_s * .02}px Arial`;
       ctx.textBaseline = 'middle';
-      ctx.fillText(hasClips ? '🗑️ 清除全部' : '暂无回放', cx, clearY);
+      ctx.fillText(hasClips ? '🗑️ 清空所有' : '暂无回放', cx, clearY);
     }
   }
 
@@ -5020,7 +5076,9 @@ class Game {
     }
     const clearY = cy + cardH / 2 - _s * .05;
     if (clips.length > 0 && x > cx - _s * .08 && x < cx + _s * .08 && y > clearY - _s * .022 && y < clearY + _s * .022) {
-      for (const c of clips) HLRecorder.deleteClipFromList(c.id);
+      if (confirm(`确定清空所有 ${clips.length} 个精彩回放吗？`)) {
+        for (const c of clips) HLRecorder.deleteClipFromList(c.id);
+      }
       return;
     }
     for (let i = 0; i < clips.length; i++) {
@@ -5037,7 +5095,8 @@ class Game {
         HLRecorder.downloadClip(clips[i]); return;
       }
       if (x > delX && x < delX + btnW && y > iy + itemH * .12 && y < iy + itemH * .12 + itemH * .76) {
-        HLRecorder.deleteClipFromList(clips[i].id); return;
+        if (confirm(`确定删除此精彩回放吗？`)) HLRecorder.deleteClipFromList(clips[i].id);
+        return;
       }
     }
   }
@@ -6226,6 +6285,8 @@ function handleTouchEnd(e) {
       const rect = canvas.getBoundingClientRect();
       const x = (t.clientX - rect.left) / rect.width * CW;
       const y = (t.clientY - rect.top) / rect.height * CH;
+      const moved = Math.hypot(t.clientX - touchX, t.clientY - touchY) > 10;
+      if (game && game.showHighlightGallery && moved) { return; }
       if (game.state === 'playing') {
         if (game.showTutorial) return;
         if (game.joystickActive) {
