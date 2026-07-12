@@ -19,6 +19,23 @@ const DEBUG = true;
 let BASE_W, BASE_H;
 const canvas = document.getElementById('c');
 const ctx = canvas.getContext('2d');
+if (!CanvasRenderingContext2D.prototype.roundRect) {
+  CanvasRenderingContext2D.prototype.roundRect = function(x, y, w, h, radii) {
+    const r = typeof radii === 'number' ? radii : (Array.isArray(radii) ? radii[0] : 0);
+    const maxR = Math.min(w / 2, h / 2, r);
+    this.moveTo(x + maxR, y);
+    this.lineTo(x + w - maxR, y);
+    this.arcTo(x + w, y, x + w, y + maxR, maxR);
+    this.lineTo(x + w, y + h - maxR);
+    this.arcTo(x + w, y + h, x + w - maxR, y + h, maxR);
+    this.lineTo(x + maxR, y + h);
+    this.arcTo(x, y + h, x, y + h - maxR, maxR);
+    this.lineTo(x, y + maxR);
+    this.arcTo(x, y, x + maxR, y, maxR);
+    this.closePath();
+    return this;
+  };
+}
 function resizeCanvas() {
   const availW = window.innerWidth - 32;
   const availH = window.innerHeight - 32;
@@ -1312,8 +1329,8 @@ const HLRecorder = {
     const startTime = t0;
     const mrOpts = this._mime ? { mimeType: this._mime } : {};
     const r = new MediaRecorder(this._stream, mrOpts);
-    r.ondataavailable = (e) => { if (e.data && e.data.size > 0) chunks.push(e.data); };
-    r.start(1000);
+    r.ondataavailable = (e) => { if (e.data && e.data.size > 0 && entry.inUse) chunks.push(e.data); };
+    r.start();
     const entry = { recorder: r, chunks, startTime, timer: null };
     entry.timer = setTimeout(() => {
       if (entry.inUse) return;
@@ -1408,10 +1425,18 @@ const HLRecorder = {
     best.inUse = true;
     if (best.timer) { clearTimeout(best.timer); best.timer = null; }
 
+    try { best.recorder.requestData(); } catch(e) {}
+    const ri = setInterval(() => {
+      if (best.recorder && best.recorder.state !== 'inactive') {
+        try { best.recorder.requestData(); } catch(e) {}
+      }
+    }, 3000);
+
     const preludeMs = perfNow - best.startTime;
     const totalDuration = Math.round((preludeMs + duration * 1000) / 1000);
 
     best.recorder.onstop = () => {
+      clearInterval(ri);
       const idx = this._rollingRecorders.indexOf(best);
       if (idx !== -1) this._rollingRecorders.splice(idx, 1);
       if (best.chunks.length > 0) {
@@ -5048,7 +5073,9 @@ class Game {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `egg_debug_${sys.platform}_${sys.browser}_${Date.now()}.json`;
+    const d = new Date();
+    const ts = d.getFullYear() + String(d.getMonth()+1).padStart(2,'0') + String(d.getDate()).padStart(2,'0') + '_' + String(d.getHours()).padStart(2,'0') + String(d.getMinutes()).padStart(2,'0') + String(d.getSeconds()).padStart(2,'0');
+    a.download = `egg_debug_${sys.platform}_${sys.browser}_${ts}.json`;
     a.style.display = 'none';
     document.body.appendChild(a);
     a.click();
@@ -5064,7 +5091,9 @@ class Game {
       const a = document.createElement('a');
       a.href = url;
       const sys = this.getSystemInfo();
-      a.download = `egg_debug_${sys.platform}_${sys.browser}_${Date.now()}.json`;
+      const d = new Date();
+      const ts = d.getFullYear() + String(d.getMonth()+1).padStart(2,'0') + String(d.getDate()).padStart(2,'0') + '_' + String(d.getHours()).padStart(2,'0') + String(d.getMinutes()).padStart(2,'0') + String(d.getSeconds()).padStart(2,'0');
+      a.download = `egg_debug_${sys.platform}_${sys.browser}_${ts}.json`;
       a.style.display = 'none';
       document.body.appendChild(a);
       a.click();
