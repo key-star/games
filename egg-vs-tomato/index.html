@@ -758,6 +758,8 @@ const SFX = {
       const isAndroid = /android/i.test(navigator.userAgent) && !/iphone|ipad|ipod/i.test(navigator.userAgent);
       this._gain.gain.value = isAndroid ? 0.55 : 0.25;
       this._gain.connect(this._ctx.destination);
+      this._dest = this._ctx.createMediaStreamDestination();
+      this._gain.connect(this._dest);
       if (this._ctx.state === 'suspended') this._ctx.resume();
       this._buildBGMBuffer();
     } catch(e) { console.warn('SFX._init failed:', e); }
@@ -1240,6 +1242,249 @@ const SFX = {
   },
 };
 
+const HLRecorder = {
+  clips: [],
+  _db: null,
+  _recording: false,
+  _stream: null,
+  _rollingRecorders: [],
+  _rollingTimer: null,
+  _mime: '',
+
+  init() {
+    try {
+      const req = indexedDB.open('egg_tomato_highlights', 1);
+      req.onupgradeneeded = (e) => {
+        const db = e.target.result;
+        if (!db.objectStoreNames.contains('clips')) {
+          db.createObjectStore('clips', { keyPath: 'id' });
+        }
+      };
+      req.onsuccess = (e) => {
+        this._db = e.target.result;
+        this._loadClipsFromDB();
+      };
+    } catch(e) {}
+  },
+
+  _loadClipsFromDB() {
+    if (!this._db) return;
+    const tx = this._db.transaction('clips', 'readonly');
+    const req = tx.objectStore('clips').getAll();
+    req.onsuccess = (e) => {
+      this.clips = (e.target.result || []).map(c => ({
+        id: c.id, timestamp: c.timestamp, type: c.type,
+        label: c.label, icon: c.icon, duration: c.duration, blob: c.blob,
+      }));
+      this.clips.sort((a, b) => b.timestamp - a.timestamp);
+      if (this.clips.length > 10) {
+        const toRemove = this.clips.splice(10);
+        for (const c of toRemove) this._deleteClipFromDB(c.id);
+      }
+    };
+  },
+
+  _saveClipToDB(clipData, meta) {
+    if (!this._db) return;
+    const id = Date.now() + '_' + Math.random().toString(36).slice(2);
+    const tx = this._db.transaction('clips', 'readwrite');
+    tx.objectStore('clips').put({ id, blob: clipData, ...meta });
+    this.clips.push({ id, ...meta, blob: clipData });
+    this.clips.sort((a, b) => b.timestamp - a.timestamp);
+    if (this.clips.length > 10) {
+      const toRemove = this.clips.splice(10);
+      for (const c of toRemove) this._deleteClipFromDB(c.id);
+    }
+  },
+
+  _deleteClipFromDB(id) {
+    if (!this._db) return;
+    const tx = this._db.transaction('clips', 'readwrite');
+    tx.objectStore('clips').delete(id);
+  },
+
+  isSupported() { return typeof MediaRecorder !== 'undefined' && typeof canvas !== 'undefined' && canvas.captureStream; },
+
+  _createRollingRecorder() {
+    if (!this._recording || !this._stream) return;
+    const t0 = performance.now();
+    const chunks = [];
+    const startTime = t0;
+    const mrOpts = this._mime ? { mimeType: this._mime } : {};
+    const r = new MediaRecorder(this._stream, mrOpts);
+    r.ondataavailable = (e) => { if (e.data && e.data.size > 0) chunks.push(e.data); };
+    r.start(1000);
+    const entry = { recorder: r, chunks, startTime, timer: null };
+    entry.timer = setTimeout(() => {
+      if (entry.inUse) return;
+      if (r.state !== 'inactive') { try { r.stop(); } catch(e) {} }
+      const idx = this._rollingRecorders.indexOf(entry);
+      if (idx !== -1) this._rollingRecorders.splice(idx, 1);
+    }, 3000);
+    this._rollingRecorders.push(entry);
+  },
+
+  _getPlatform() {
+    const ua = navigator.userAgent;
+    if (/iphone|ipad|ipod/i.test(ua)) return 'ios';
+    if (/android/i.test(ua)) return 'android';
+    return 'desktop';
+  },
+
+  start() {
+    if (!this.isSupported()) return;
+    if (this._recording) return;
+    try {
+      const platform = this._getPlatform();
+      const captureFps = (platform === 'ios' || platform === 'android') ? 15 : 30;
+      const videoTrack = canvas.captureStream(captureFps).getVideoTracks()[0];
+      let audioTrack = null;
+      try { SFX._init(); if (SFX._dest) audioTrack = SFX._dest.stream.getAudioTracks()[0]; } catch(e) {}
+      if (audioTrack) {
+        this._stream = new MediaStream([videoTrack, audioTrack]);
+      } else {
+        this._stream = new MediaStream([videoTrack]);
+      }
+      let types = [];
+      if (platform === 'desktop') {
+        types = ['video/mp4;codecs=avc1.4D401E', 'video/mp4;codecs=avc1.42E01E', 'video/mp4',
+                 'video/webm;codecs=vp8', 'video/webm;codecs=vp9', 'video/webm',
+                 'video/mp4;codecs=hvc1', 'video/mp4;codecs=hev1'];
+      } else if (platform === 'ios') {
+        types = ['video/mp4;codecs=avc1.4D401E', 'video/mp4;codecs=avc1.42E01E', 'video/mp4',
+                 'video/mp4;codecs=mp4v', 'video/webm',
+                 'video/mp4;codecs=hvc1', 'video/mp4;codecs=hev1'];
+      } else {
+        types = ['video/mp4;codecs=avc1.4D401E', 'video/mp4;codecs=avc1.42E01E', 'video/mp4',
+                 'video/webm;codecs=vp8', 'video/webm;codecs=vp9', 'video/webm',
+                 'video/mp4;codecs=hvc1', 'video/mp4;codecs=hev1'];
+      }
+      let mime = '';
+      for (const t of types) { if (MediaRecorder.isTypeSupported(t)) { mime = t; break; } }
+      if (!mime) {
+        console.warn('HL: no specific mime supported, trying default');
+      }
+      this._mime = mime;
+      this._recording = true;
+      this._createRollingRecorder();
+      this._rollingTimer = setInterval(() => this._createRollingRecorder(), 1500);
+    } catch(e) { console.warn('HL: start fail', e); }
+  },
+
+  reportFps(_fps) {},
+
+  stop() {
+    this._recording = false;
+    if (this._rollingTimer) { clearInterval(this._rollingTimer); this._rollingTimer = null; }
+    for (const entry of this._rollingRecorders) {
+      if (entry.timer) { clearTimeout(entry.timer); }
+      if (entry.recorder && entry.recorder.state !== 'inactive') {
+        try { entry.recorder.stop(); } catch(e) {}
+      }
+    }
+    this._rollingRecorders = [];
+    if (this._stream) { this._stream.getVideoTracks().forEach(t => t.stop()); this._stream = null; }
+  },
+
+  saveHighlight(type, label, icon, duration = 10) {
+    if (!this._recording) return;
+    const t0 = performance.now();
+    const now = Date.now();
+    for (const c of this.clips) {
+      if (c.type === type && now - c.timestamp < 10000) return;
+    }
+    if (this._rollingRecorders.length === 0) return;
+
+    const perfNow = performance.now();
+    const targetStart = perfNow - 3000;
+    let best = null, bestDiff = Infinity;
+    for (const entry of this._rollingRecorders) {
+      if (entry.inUse) continue;
+      const diff = Math.abs(entry.startTime - targetStart);
+      if (diff < bestDiff) { bestDiff = diff; best = entry; }
+    }
+    if (!best) return;
+
+    best.inUse = true;
+    if (best.timer) { clearTimeout(best.timer); best.timer = null; }
+
+    const preludeMs = perfNow - best.startTime;
+    const totalDuration = Math.round((preludeMs + duration * 1000) / 1000);
+
+    best.recorder.onstop = () => {
+      const idx = this._rollingRecorders.indexOf(best);
+      if (idx !== -1) this._rollingRecorders.splice(idx, 1);
+      if (best.chunks.length > 0) {
+        const actualDur = Math.max(1, best.chunks.length);
+        const actualType = best.chunks[0].type || this._mime;
+        const blob = new Blob(best.chunks, { type: actualType });
+        this._saveClipToDB(blob, { type, label, icon, timestamp: now, duration: totalDuration });
+      }
+    };
+
+    setTimeout(() => {
+      if (best.recorder && best.recorder.state !== 'inactive') {
+        try { best.recorder.stop(); } catch(e) {}
+      }
+    }, duration * 1000);
+  },
+
+  patchWebMDuration(blob) {
+    return Promise.resolve(blob);
+  },
+
+  async downloadClip(clip) {
+    if (!clip || !clip.blob) return;
+    const url = URL.createObjectURL(clip.blob);
+    const a = document.createElement('a');
+    a.href = url;
+    const ts = new Date(); const fmt = ts.getFullYear() + ('0'+(ts.getMonth()+1)).slice(-2) + ('0'+ts.getDate()).slice(-2) + '_' + ('0'+ts.getHours()).slice(-2) + ('0'+ts.getMinutes()).slice(-2) + ('0'+ts.getSeconds()).slice(-2);
+    const mt = (clip.blob.type || '').split(';')[0].split('/')[1] || 'webm';
+    a.download = `highlight_${clip.type}_${fmt}.${mt}`;
+    a.style.display = 'none';
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 2000);
+  },
+
+  playClip(clip) {
+    if (!clip || !clip.blob || clip.blob.size === 0) return;
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,.8);z-index:9999;display:flex;align-items:center;justify-content:center;';
+    const v = document.createElement('video');
+    v.controls = true;
+    v.style.cssText = 'max-width:95vw;max-height:90vh;border-radius:8px;';
+    const url = URL.createObjectURL(clip.blob);
+    v.src = url;
+    v.addEventListener('ended', () => { v.pause(); });
+    const close = document.createElement('div');
+    close.textContent = '✕';
+    close.style.cssText = 'position:absolute;top:16px;right:20px;font-size:28px;color:#fff;cursor:pointer;z-index:10000;';
+    close.onclick = () => { document.body.removeChild(overlay); URL.revokeObjectURL(url); };
+    overlay.appendChild(v);
+    overlay.appendChild(close);
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) { document.body.removeChild(overlay); URL.revokeObjectURL(url); } });
+    document.body.appendChild(overlay);
+    v.play().catch(() => {});
+  },
+
+  deleteClipFromList(id) {
+    this.clips = this.clips.filter(c => c.id !== id);
+    this._deleteClipFromDB(id);
+  },
+
+  getStats() {
+    let active = 0, inUse = 0, chunks = 0, bytes = 0, codec = this._mime;
+    for (const e of this._rollingRecorders) {
+      if (e.recorder && e.recorder.state !== 'inactive') active++;
+      if (e.inUse) inUse++;
+      chunks += e.chunks.length;
+      for (const c of e.chunks) bytes += c.size;
+    }
+    return { active, inUse, chunks, bytes, codec };
+  },
+};
+
 class Game {
   constructor() {
     this.egg = new Egg();
@@ -1255,6 +1500,7 @@ class Game {
     this.bestTime = 0;
     this.difficulty = 0;
     this.nearMissTimer = 0;
+    this.nearMissCount = 0;
     this.unlockedSkins = ['普通蛋'];
     this.skinPoints = 0;
     this.achievements = [];
@@ -1345,6 +1591,7 @@ class Game {
     this.mouseY = CY;
     // Joystick
     this.joystickEnabled = false;
+    this.highlightRecording = false;
     this.joystickActive = false;
     this.joystickTouchId = null;
     this.joystickDir = { x: 0, y: 0 };
@@ -1654,6 +1901,7 @@ class Game {
       SFX.muted = s.muted === true;
       this.debugInfo.showDebug = s.showDebug === true;
       this.joystickEnabled = s.joystickEnabled === true;
+      this.highlightRecording = s.highlightRecording === true;
     } catch(e) {}
   }
 
@@ -1662,7 +1910,8 @@ class Game {
       localStorage.setItem('egg_settings', JSON.stringify({
         muted: SFX.muted,
         showDebug: this.debugInfo.showDebug,
-        joystickEnabled: this.joystickEnabled
+        joystickEnabled: this.joystickEnabled,
+        highlightRecording: this.highlightRecording
       }));
     } catch(e) {}
   }
@@ -1728,6 +1977,7 @@ class Game {
     this.difficulty = 0;
     this.spawnTimer = 0;
     this.nearMissTimer = 0;
+    this.nearMissCount = 0;
     this.egg = new Egg();
     this.egg.maxHp = this.getMaxHp();
     this.egg.hp = this.egg.maxHp;
@@ -1975,6 +2225,7 @@ class Game {
     this.jumpTotalFrames = Math.max(10, Math.floor(totalLen / 10));
     this.jumpTimer = 0;
     this.jumpCharge = charge;
+    if (charge >= 0.85) HLRecorder.saveHighlight('long_jump', '超级跳跃', '🦘', 7);
   }
 
   jumpLanding() {
@@ -2000,7 +2251,7 @@ class Game {
     const edgeBoost = edgeMargin < UNIT * 0.3 ? 1 + (1 - edgeMargin / (UNIT * 0.3)) * 0.6 : 1;
     // Kncokback tomatoes in range
     const splitterSpawns = [];
-    let killedAny = false;
+    let landKillCount = 0;
     for (const t of this.tomatoes) {
       const d = t.pos.distTo(this.egg.pos);
       if (d < landRange) {
@@ -2019,7 +2270,7 @@ class Game {
           t.hp -= Math.ceil(1 + power * (this.egg.splashPowerBuff > 0 ? 2 : 1));
         }
         if (t.hp <= 0) {
-          killedAny = true;
+          landKillCount++;
           if (t.type === 'splitter') {
             for (let i = 0; i < 2; i++) {
               const seed = new Tomato('seed');
@@ -2032,7 +2283,7 @@ class Game {
       }
     }
     for (const s of splitterSpawns) this.tomatoes.push(s);
-    if (killedAny) this.triggerChainLightning(this.egg.pos.x, this.egg.pos.y);
+    if (landKillCount > 0) this.triggerChainLightning(this.egg.pos.x, this.egg.pos.y);
   }
 
   triggerChainLightning(cx, cy) {
@@ -2073,6 +2324,7 @@ class Game {
     }
     SFX.thunder();
     this.showMessage(`⚡ 闪电链命中${chain.length}个番茄！`, 200);
+    if (chain.length >= 3) HLRecorder.saveHighlight('chain_lightning', '闪电链', '⚡', 4);
   }
 
   quickSplash() {
@@ -2101,7 +2353,7 @@ class Game {
     const edgeMargin = UNIT - distCenter;
     const edgeBoost = edgeMargin < UNIT * 0.3 ? 1 + (1 - edgeMargin / (UNIT * 0.3)) * 0.6 : 1;
     // Damage & knockback
-    let killedAny = false;
+    let splashKillCount = 0;
     for (const t of this.tomatoes) {
       const d = t.pos.distTo(this.egg.pos);
       if (d < splashRange) {
@@ -2116,12 +2368,12 @@ class Game {
           t.hp -= Math.ceil(1 + power * powerMult);
         }
         if (t.hp <= 0) {
-          killedAny = true;
+          splashKillCount++;
           this.killTomato(t);
         }
       }
     }
-    if (killedAny) this.triggerChainLightning(cx, cy);
+    if (splashKillCount > 0) this.triggerChainLightning(cx, cy);
   }
 
   dash(dirX, dirY) {
@@ -2168,6 +2420,9 @@ class Game {
     this.egg.combo++;
     this.egg.comboTimer = 90;
     if (this.comboCount > this.maxCombo) this.maxCombo = this.comboCount;
+    if (this.comboCount === 20) HLRecorder.saveHighlight('combo_20', '20连击', '🎖️', 8);
+    if (this.comboCount === 50) HLRecorder.saveHighlight('combo_50', '50连击', '🏆', 10);
+    if (t.type === 'boss') HLRecorder.saveHighlight('boss_kill', 'BOSS击杀', '👾', 10);
     let pts = 1;
     if (t.type === 'big') pts = 4;
     if (t.type === 'boss') pts = 5;
@@ -2349,8 +2604,10 @@ class Game {
       this.fireShellTimer = 300;
       SFX.fireIgnite();
       this.showMessage('🔥 火焰蛋壳！敢碰我就请你吃烤番茄！', 200);
+      HLRecorder.saveHighlight('fire_kill', '火焰蛋壳', '🔥', 8);
     } else if (a.type.id === 'gravity') {
       const gx = a.x, gy = a.y;
+      HLRecorder.saveHighlight('gravity_use', '引力漩涡', '🌀', 8);
       this.gravityField = { x: gx, y: gy, timer: 180 };
       for (const t of this.tomatoes) {
         t.gravityTx = gx;
@@ -2397,6 +2654,7 @@ class Game {
           15 + Math.floor(dist * 20)));
       }
       this.showMessage('💥 斥力震波！番茄有多远滚多远，一个不留！', 200);
+      HLRecorder.saveHighlight('repulse_use', '斥力震波', '💥', 6);
     } else if (a.type.id === 'tomato_apocalypse') {
       this.apocalypseTimer = 180;
       this.showMessage('🍅💥 3...', 60);
@@ -2443,6 +2701,7 @@ class Game {
     if (this.isPreShop) {
       this.isPreShop = false;
       this.state = 'playing';
+      if (this.highlightRecording) HLRecorder.start();
       this.waveState = this.gameMode === 'endless' ? 'endless' : 'preparing';
       this.wavePrepTimer = 90;
       if (this.gameMode === 'challenge') {
@@ -2454,6 +2713,7 @@ class Game {
     }
     this.shopQtys = [];
     this.state = 'playing';
+    if (this.highlightRecording) HLRecorder.start();
     if (this.gameMode === 'endless') {
       this.waveState = 'playing';
       this.spawnTimer = 0;
@@ -2667,6 +2927,7 @@ class Game {
         this.showMessage('🍅💥 1...', 60);
         try { SFX._tone(600, 0.15, 'sine', 0.14); } catch(e) {}
       } else if (this.apocalypseTimer === 0) {
+        HLRecorder.saveHighlight('apocalypse_kill', '番茄末日', '🍅', 12);
         try {
           SFX._noise(0.3, 0.25, 0, 3000);
           SFX._tone(80, 0.5, 'sawtooth', 0.15);
@@ -2772,6 +3033,8 @@ class Game {
       } else if (d < t.r + this.egg.r + 15 && this.nearMissTimer <= 0) {
         this.nearMissTimer = 40;
         SFX.nearMiss();
+        this.nearMissCount = (this.nearMissCount || 0) + 1;
+        if (this.nearMissCount >= 7) { this.nearMissCount = 0; HLRecorder.saveHighlight('near_miss', '极限走位', '🏃', 5); }
         for (let i2 = 0; i2 < 3; i2++) {
           const a = Math.random() * Math.PI * 2;
           this.particles.push(acquireParticle(t.pos.x, t.pos.y, Math.cos(a) * 2, Math.sin(a) * 2, 2, '#fff', 10));
@@ -2979,13 +3242,10 @@ class Game {
 
   triggerVictory() {
     this.goalReached = true;
-    this.survivalHistory.push(Math.floor(this.survivalTime));
-    if (this.survivalHistory.length > 50) this.survivalHistory.shift();
     this.state = 'victory';
     this.victoryState = 'incoming';
     this.victoryTimer = 600;
     this.reinforcements = [];
-    this.dumpDebugData();
     SFX.stopBGM();
     SFX.victory();
     this.showMessage('🎉 援军到达！蛋蛋大军降临！', 180);
@@ -3136,7 +3396,7 @@ class Game {
       if (this.reinforcements.every(r => r.phase === 'done')) {
         if (this.victoryExitTimer === 0) this.victoryExitTimer = 30;
         this.victoryExitTimer--;
-        if (this.victoryExitTimer <= 0) { this.pushDebugData(); this.state = 'victoryscreen'; }
+        if (this.victoryExitTimer <= 0) { this._exitToVictoryScreen(); }
       }
     } else {
       // Phase 4: 胜利完成 → 继续处理剩余蛋，结束后跳转
@@ -3186,14 +3446,28 @@ class Game {
         }
       }
       if (this.victoryTimer <= 0) {
-        this.pushDebugData();
-        this.state = 'victoryscreen';
+        this._exitToVictoryScreen();
       } else if (this.reinforcements.every(r => r.phase === 'done')) {
         if (this.victoryExitTimer === 0) this.victoryExitTimer = 30;
         this.victoryExitTimer--;
-        if (this.victoryExitTimer <= 0) { this.pushDebugData(); this.state = 'victoryscreen'; }
+        if (this.victoryExitTimer <= 0) { this._exitToVictoryScreen(); }
       }
     }
+  }
+
+  _exitToVictoryScreen() {
+    this.pushDebugData();
+    HLRecorder.stop();
+    this.totalGamesPlayed++;
+    this.totalSurvivalTime += this.survivalTime;
+    if (this.survivalTime > this.bestTime) this.bestTime = this.survivalTime;
+    if (!this.splashUsedThisRound && this.survivalTime > this.bestNoSplashTime) this.bestNoSplashTime = this.survivalTime;
+    if (this.perfectRoundThisRound && this.survivalTime > this.bestPerfectTime) this.bestPerfectTime = this.survivalTime;
+    this.survivalHistory.push(Math.floor(this.survivalTime));
+    if (this.survivalHistory.length > 50) this.survivalHistory.shift();
+    this.saveProgress();
+    this.checkAchievements();
+    this.state = 'victoryscreen';
   }
 
   _updateParticles() {
@@ -3234,9 +3508,9 @@ class Game {
 
   draw() {
     ctx.clearRect(0, 0, CW, CH);
-    if (this.state === 'menu') { this.drawMenu(); this.drawTransitionOverlay(); return; }
-    if (this.state === 'gameover') { this.drawGameOver(); this.drawTransitionOverlay(); return; }
-    if (this.state === 'victoryscreen') { this.drawVictoryScreen(); this.drawTransitionOverlay(); return; }
+    if (this.state === 'menu') { this.drawMenu(); this.drawTransitionOverlay(); if (this.showHighlightGallery) this.drawHighlightGallery(); return; }
+    if (this.state === 'gameover') { this.drawGameOver(); this.drawTransitionOverlay(); if (this.showHighlightGallery) this.drawHighlightGallery(); return; }
+    if (this.state === 'victoryscreen') { this.drawVictoryScreen(); this.drawTransitionOverlay(); if (this.showHighlightGallery) this.drawHighlightGallery(); return; }
     if (this.state === 'shop' || this.state === 'preshop') { this.drawShopField(); this.drawShop(); this.drawTransitionOverlay(); if (this.showTutorial) this.drawTutorial(); return; }
 
     ctx.fillStyle = '#f5f5f5';
@@ -4075,6 +4349,15 @@ class Game {
     ctx.fillStyle = this.joystickEnabled ? '#fff' : '#999';
     ctx.font = `${SIZE * .03}px Arial`;
     ctx.fillText('🎮', joyX + toggleSize / 2, toggleY + toggleSize / 2);
+    // Recording toggle
+    const recX = joyX + toggleSize + togglePad * .5;
+    ctx.fillStyle = this.highlightRecording ? '#81c784' : '#e0e0e0';
+    ctx.beginPath();
+    ctx.roundRect(recX, toggleY, toggleSize, toggleSize, 6);
+    ctx.fill();
+    ctx.fillStyle = this.highlightRecording ? '#fff' : '#999';
+    ctx.font = `${SIZE * .025}px Arial`;
+    ctx.fillText('📹', recX + toggleSize / 2, toggleY + toggleSize / 2);
     ctx.textBaseline = 'alphabetic';
 
     // Egg skin preview
@@ -4166,19 +4449,38 @@ class Game {
     const retryBtnY = CY + V * .10;
     const retryBtnH = SIZE * .08;
     ctx.fillStyle = '#81c784';
-    ctx.fillRect(CX - SIZE * .2, retryBtnY, SIZE * .4, retryBtnH);
+    ctx.beginPath();
+    ctx.roundRect(CX - SIZE * .2, retryBtnY, SIZE * .4, retryBtnH, 10);
+    ctx.fill();
     ctx.fillStyle = '#fff';
     ctx.font = `bold ${SIZE * .05}px Arial`;
-    ctx.fillText('再来一次', CX, retryBtnY + retryBtnH * .73);
+    ctx.textBaseline = 'middle';
+    ctx.fillText('再来一次', CX, retryBtnY + retryBtnH / 2);
     const shareBtnY = CY + V * .23;
     const shareBtnH = SIZE * .07;
     ctx.fillStyle = '#a5d6a7';
-    ctx.fillRect(CX - SIZE * .2, shareBtnY, SIZE * .4, shareBtnH);
+    ctx.beginPath();
+    ctx.roundRect(CX - SIZE * .2, shareBtnY, SIZE * .4, shareBtnH, 10);
+    ctx.fill();
     ctx.fillStyle = '#fff';
     ctx.font = `bold ${SIZE * .035}px Arial`;
-    ctx.fillText('📸 生成战绩', CX, shareBtnY + shareBtnH * .65);
+    ctx.textBaseline = 'middle';
+    ctx.fillText('📸 生成战绩', CX, shareBtnY + shareBtnH / 2);
+    // Gallery button
+    const galBtnH = SIZE * .055;
+    const galBtnW = SIZE * .28;
+    const galBtnY = CY + V * .35;
+    ctx.fillStyle = '#4fc3f7';
+    ctx.beginPath();
+    ctx.roundRect(CX - galBtnW / 2, galBtnY - galBtnH * .65, galBtnW, galBtnH, 8);
+    ctx.fill();
+    ctx.fillStyle = '#fff';
+    ctx.font = `bold ${SIZE * .026}px Arial`;
+    ctx.textBaseline = 'middle';
+    ctx.textAlign = 'center';
+    ctx.fillText(`📹 精彩回放 (${HLRecorder.clips.length})`, CX, galBtnY - galBtnH * .15);
     // Download debug data
-    const dbgY = CY + V * .38;
+    const dbgY = galBtnY + SIZE * .05;
     ctx.fillStyle = '#546e7a';
     ctx.font = `${SIZE * .024}px Arial`;
     ctx.textAlign = 'center';
@@ -4437,11 +4739,25 @@ class Game {
       { bg: '#81c784', hoverBg: '#a5d6a7', fontSize: cardH * .04 });
     this.drawButton('📸 生成战绩', CX + btnGap / 2, btnY, btnW, cardH * .078,
       { bg: '#ffd54f', hoverBg: '#ffe082', fontSize: cardH * .032 });
-    // Download debug data (outside card bottom)
-    const dbgOutY = cardY + cardH + SIZE * .03;
+    // Gallery button
+    const galBtnH2 = cardH * .04;
+    const galBtnW2 = cardW * .32;
+    const galOutY = cardY + cardH + SIZE * .08;
+    ctx.fillStyle = '#4fc3f7';
+    ctx.beginPath();
+    ctx.roundRect(CX - galBtnW2 / 2, galOutY - galBtnH2 * .65, galBtnW2, galBtnH2, 8);
+    ctx.fill();
+    ctx.fillStyle = '#fff';
+    ctx.font = `bold ${cardH * .024}px Arial`;
+    ctx.textBaseline = 'middle';
+    ctx.textAlign = 'center';
+    ctx.fillText(`📹 精彩回放 (${HLRecorder.clips.length})`, CX, galOutY - galBtnH2 * .15);
+    // Download debug data
+    const dbgOutY = galOutY + SIZE * .05;
     ctx.fillStyle = '#90a4ae';
     ctx.font = `${cardH * .024}px Arial`;
     ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
     ctx.fillText('📥 导出调试数据', CX, dbgOutY);
     // === Footer ===
     const fLineY = cardY + cardH * .92;
@@ -4500,10 +4816,205 @@ class Game {
       state: this.state, gameMode: this.gameMode,
       comboCount: this.comboCount, maxCombo: this.maxCombo
     };
-    const data = { system: sys, summary, gameState, frames: r.slice(-300), errors: this.debugInfo.errors, audioLog: this.debugInfo.audioLog, ts: Date.now() };
-    try {
-      fetch('/api/debug', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }).catch(() => {});
-    } catch(e) {}
+    const recorderState = HLRecorder._recording ? (() => { const s = HLRecorder.getStats(); return { recording: true, active: s.active, inUse: s.inUse, chunks: s.chunks, bytes: s.bytes, mime: s.codec }; })() : { recording: false };
+    const highlights = HLRecorder.clips.map(c => ({ type: c.type, label: c.label, icon: c.icon, timestamp: c.timestamp, duration: c.duration, bytes: c.blob?.size || 0, mime: c.blob?.type || '' }));
+    const platformTag = sys.platform + '_' + sys.browser;
+    const dataStr = JSON.stringify({ system: sys, summary, gameState, frames: r.slice(-300), errors: this.debugInfo.errors, audioLog: this.debugInfo.audioLog, recorderState, highlights, ts: Date.now(), platformTag });
+    const serverUrl = window.location.origin;
+    fetch(serverUrl + '/api/debug', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: dataStr,
+    }).then(res => res.json()).then(data => {
+      if (data.ok) {
+        this.debugInfo.record = [];
+        this.debugInfo.audioLog = [];
+        this.debugPendingDownload = null;
+        this.lastTapX = 0;
+        this.lastTapY = 0;
+      }
+    }).catch(() => {
+      this.debugPendingDownload = dataStr;
+      this.showMessage('📥 点击"下载调试数据"按钮保存文件', 180);
+    });
+  }
+
+  drawHighlightGallery() {
+    ctx.fillStyle = 'rgba(0,0,0,.75)';
+    ctx.fillRect(0, 0, CW, CH);
+    const clips = HLRecorder.clips;
+    const isMobile = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+    const _s = SIZE * (isMobile ? 1.3 : 1.0);
+    const cardW = _s * .75, cardH = _s * .6;
+    const cx = CX, cy = CY;
+    const scrollY = this._galleryScrollY || 0;
+    ctx.save();
+    ctx.shadowColor = 'rgba(0,0,0,.3)';
+    ctx.shadowBlur = 20;
+    ctx.fillStyle = '#fff';
+    ctx.beginPath();
+    ctx.roundRect(cx - cardW / 2, cy - cardH / 2, cardW, cardH, 16);
+    ctx.fill();
+    ctx.shadowBlur = 0;
+    ctx.restore();
+    ctx.fillStyle = '#4fc3f7';
+    ctx.font = `bold ${_s * .045}px Arial`;
+    ctx.textAlign = 'center';
+    ctx.fillText('📹 精彩回放', cx, cy - cardH / 2 + _s * .07);
+    const closeX = cx + cardW / 2 - _s * .05;
+    const closeY = cy - cardH / 2 + _s * .05;
+    ctx.fillStyle = '#e0e0e0';
+    ctx.beginPath();
+    ctx.roundRect(closeX - _s * .025, closeY - _s * .025, _s * .05, _s * .05, 6);
+    ctx.fill();
+    ctx.fillStyle = '#999';
+    ctx.font = `bold ${_s * .03}px Arial`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('✕', closeX, closeY);
+    const listY = cy - cardH / 2 + _s * .12;
+    const listH = cardH - _s * .22;
+    const itemH = _s * .075;
+    const totalListH = clips.length * itemH;
+    const maxScroll = Math.max(0, totalListH - listH);
+    if (scrollY > maxScroll) { this._galleryScrollY = maxScroll; }
+    if (scrollY < 0) { this._galleryScrollY = 0; }
+    const clampedScroll = this._galleryScrollY || 0;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(cx - cardW / 2 + _s * .04, listY, cardW - _s * .08, listH);
+    ctx.clip();
+    if (clips.length === 0) {
+      ctx.fillStyle = '#bbb';
+      ctx.font = `${_s * .028}px Arial`;
+      ctx.textAlign = 'center';
+      ctx.fillText('暂无精彩回放', cx, listY + listH / 2);
+    } else {
+      for (let i = 0; i < clips.length; i++) {
+        const c = clips[i];
+        const iy = listY + i * itemH - clampedScroll;
+        if (iy + itemH < listY || iy > listY + listH) continue;
+        ctx.fillStyle = i % 2 === 0 ? '#f5f9ff' : '#fff';
+        ctx.beginPath();
+        ctx.roundRect(cx - cardW / 2 + _s * .04, iy, cardW - _s * .08, itemH - 4, 8);
+        ctx.fill();
+        ctx.font = `${_s * .032}px Arial`;
+        ctx.textAlign = 'left';
+        ctx.fillText(c.icon || '📹', cx - cardW / 2 + _s * .07, iy + itemH * .55);
+        ctx.fillStyle = '#333';
+        ctx.font = `bold ${_s * .022}px Arial`;
+        ctx.fillText(c.label || c.type, cx - cardW / 2 + _s * .13, iy + itemH * .42);
+        ctx.fillStyle = '#999';
+        ctx.font = `${_s * .015}px Arial`;
+        const d = new Date(c.timestamp);
+        const ts = `${d.getMonth()+1}/${d.getDate()} ${('0'+d.getHours()).slice(-2)}:${('0'+d.getMinutes()).slice(-2)}:${('0'+d.getSeconds()).slice(-2)}`;
+        ctx.fillText(ts, cx - cardW / 2 + _s * .13, iy + itemH * .72);
+        ctx.fillStyle = '#aaa';
+        ctx.font = `${_s * .015}px Arial`;
+        ctx.fillText(`${Math.round(c.duration || 10)}s`, cx + cardW / 2 - _s * .29, iy + itemH * .55);
+        ctx.fillStyle = '#4fc3f7';
+        ctx.beginPath();
+        ctx.roundRect(cx + cardW / 2 - _s * .245, iy + itemH * .12, _s * .055, itemH * .76, 6);
+        ctx.fill();
+        ctx.fillStyle = '#fff';
+        ctx.font = `bold ${_s * .022}px Arial`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('▶', cx + cardW / 2 - _s * .2175, iy + itemH * .5);
+        ctx.fillStyle = '#81c784';
+        ctx.beginPath();
+        ctx.roundRect(cx + cardW / 2 - _s * .175, iy + itemH * .12, _s * .055, itemH * .76, 6);
+        ctx.fill();
+        ctx.fillStyle = '#fff';
+        ctx.font = `${_s * .02}px Arial`;
+        ctx.textBaseline = 'middle';
+        ctx.fillText('⬇', cx + cardW / 2 - _s * .1475, iy + itemH * .5);
+        ctx.fillStyle = '#ef9a9a';
+        ctx.beginPath();
+        ctx.roundRect(cx + cardW / 2 - _s * .105, iy + itemH * .12, _s * .055, itemH * .76, 6);
+        ctx.fill();
+        ctx.fillStyle = '#fff';
+        ctx.font = `${_s * .02}px Arial`;
+        ctx.fillText('✕', cx + cardW / 2 - _s * .0775, iy + itemH * .5);
+      }
+    }
+    ctx.restore();
+    if (maxScroll > 0) {
+      const sbW = _s * .012, sbX = cx + cardW / 2 - _s * .02;
+      ctx.fillStyle = 'rgba(0,0,0,.1)';
+      ctx.beginPath();
+      ctx.roundRect(sbX, listY, sbW, listH, sbW / 2);
+      ctx.fill();
+      const thumbH = Math.max(_s * .02, listH * (listH / totalListH));
+      const thumbY = listY + (clampedScroll / maxScroll) * (listH - thumbH);
+      ctx.fillStyle = 'rgba(0,0,0,.25)';
+      ctx.beginPath();
+      ctx.roundRect(sbX, thumbY, sbW, thumbH, sbW / 2);
+      ctx.fill();
+    }
+    ctx.textBaseline = 'alphabetic';
+    ctx.textAlign = 'center';
+    {
+      const clearY = cy + cardH / 2 - _s * .05;
+      const hasClips = clips.length > 0;
+      ctx.fillStyle = hasClips ? '#e53935' : '#e0e0e0';
+      ctx.beginPath();
+      ctx.roundRect(cx - _s * .08, clearY - _s * .022, _s * .16, _s * .044, 8);
+      ctx.fill();
+      ctx.fillStyle = '#fff';
+      ctx.font = `bold ${_s * .02}px Arial`;
+      ctx.textBaseline = 'middle';
+      ctx.fillText(hasClips ? '🗑️ 清除全部' : '暂无回放', cx, clearY);
+    }
+  }
+
+  _handleGalleryClick(x, y) {
+    const clips = HLRecorder.clips;
+    const isMobile = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+    const _s = SIZE * (isMobile ? 1.3 : 1.0);
+    const cardW = _s * .75, cardH = _s * .6;
+    const cx = CX, cy = CY;
+    const scrollY = this._galleryScrollY || 0;
+    const closeX = cx + cardW / 2 - _s * .05;
+    const closeY = cy - cardH / 2 + _s * .05;
+    if (x > closeX - _s * .025 && x < closeX + _s * .025 && y > closeY - _s * .025 && y < closeY + _s * .025) {
+      this.showHighlightGallery = false; return;
+    }
+    const listY = cy - cardH / 2 + _s * .12;
+    const listH = cardH - _s * .22;
+    const itemH = _s * .075;
+    const totalListH = clips.length * itemH;
+    const maxScroll = Math.max(0, totalListH - listH);
+    const clampedScroll = this._galleryScrollY || 0;
+    if (maxScroll > 0) {
+      const sbW = _s * .012, sbX = cx + cardW / 2 - _s * .02;
+      if (x > sbX && x < sbX + sbW && y > listY && y < listY + listH) {
+        this._galleryScrollY = ((y - listY) / listH) * maxScroll;
+        return;
+      }
+    }
+    const clearY = cy + cardH / 2 - _s * .05;
+    if (clips.length > 0 && x > cx - _s * .08 && x < cx + _s * .08 && y > clearY - _s * .022 && y < clearY + _s * .022) {
+      for (const c of clips) HLRecorder.deleteClipFromList(c.id);
+      return;
+    }
+    for (let i = 0; i < clips.length; i++) {
+      const iy = listY + i * itemH - clampedScroll;
+      if (iy + itemH < listY || iy > listY + listH) continue;
+      const playX = cx + cardW / 2 - _s * .245;
+      const dlX = cx + cardW / 2 - _s * .175;
+      const delX = cx + cardW / 2 - _s * .105;
+      const btnW = _s * .055;
+      if (x > playX && x < playX + btnW && y > iy + itemH * .12 && y < iy + itemH * .12 + itemH * .76) {
+        HLRecorder.playClip(clips[i]); return;
+      }
+      if (x > dlX && x < dlX + btnW && y > iy + itemH * .12 && y < iy + itemH * .12 + itemH * .76) {
+        HLRecorder.downloadClip(clips[i]); return;
+      }
+      if (x > delX && x < delX + btnW && y > iy + itemH * .12 && y < iy + itemH * .12 + itemH * .76) {
+        HLRecorder.deleteClipFromList(clips[i].id); return;
+      }
+    }
   }
 
   downloadDebugData() {
@@ -4529,7 +5040,9 @@ class Game {
       state: this.state, gameMode: this.gameMode,
       comboCount: this.comboCount, maxCombo: this.maxCombo
     };
-    const data = { system: sys, summary, gameState, frames: r.slice(-300), errors: this.debugInfo.errors, audioLog: this.debugInfo.audioLog, ts: Date.now() };
+    const recorderState = HLRecorder._recording ? (() => { const s = HLRecorder.getStats(); return { recording: true, active: s.active, inUse: s.inUse, chunks: s.chunks, bytes: s.bytes, mime: s.codec }; })() : { recording: false };
+    const highlights = HLRecorder.clips.map(c => ({ type: c.type, label: c.label, icon: c.icon, timestamp: c.timestamp, duration: c.duration, bytes: c.blob?.size || 0, mime: c.blob?.type || '' }));
+    const data = { system: sys, summary, gameState, frames: r.slice(-300), errors: this.debugInfo.errors, audioLog: this.debugInfo.audioLog, recorderState, highlights, ts: Date.now() };
     const json = JSON.stringify(data, null, 2);
     const blob = new Blob([json], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
@@ -4562,55 +5075,9 @@ class Game {
     }
   }
 
-  dumpDebugData() {
-    if (this.debugInfo.record.length === 0) return;
-    const r = this.debugInfo.record;
-    const sys = this.getSystemInfo();
-    const artTypes = this._artifactTypes || [];
-    const artTotalW = artTypes.reduce((s, t) => s + t.weight, 0);
-    const summary = {
-      survivalTime: this.survivalTime,
-      frames: r.length,
-      avgDt: (r.reduce((s, f) => s + f.dt, 0) / r.length).toFixed(3),
-      avgFps: r.length > 0 ? r[r.length - 1].fps : 0,
-      tomatoesKilled: this.sessionKills,
-      goldEarned: this.gold,
-      jumps: r.filter(f => f.jumping).length,
-      avgVel: (r.reduce((s, f) => s + Math.abs(f.vx) + Math.abs(f.vy), 0) / r.length).toFixed(1),
-      artifactWeights: Object.fromEntries(artTypes.map(t => [t.label, { w: t.weight, pct: artTotalW > 0 ? (t.weight / artTotalW * 100).toFixed(1) + '%' : '0%' }])),
-    };
-    const audioLog = this.debugInfo.audioLog;
-    const dataStr = JSON.stringify({ system: sys, summary, frames: r.slice(-300), errors: this.debugInfo.errors, audioLog });
-    const platformTag = sys.platform + '_' + sys.browser;
-    // Auto-send to debug server
-    const serverUrl = window.location.origin;
-    fetch(serverUrl + '/api/debug', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ system: sys, summary, frames: r.slice(-300), platformTag, errors: this.debugInfo.errors, audioLog }),
-    }).then(res => res.json()).then(data => {
-      if (data.ok) {
-        this.showMessage('✅ 调试数据已发送到服务器', 200);
-        console.log(`📤 数据已发送到服务器: ${data.filename}`);
-        this.debugInfo.record = [];
-        this.debugInfo.audioLog = [];
-    this.debugPendingDownload = null;
-    this.lastTapX = 0;
-    this.lastTapY = 0;
-      }
-    }).catch(err => {
-      console.log('📤 服务器不可达，显示下载按钮');
-      this.debugPendingDownload = dataStr;
-      this.showMessage('📥 点击"下载调试数据"按钮保存文件', 180);
-      console.log('📊 调试数据（复制下面 JSON 发送给开发者）');
-      console.log('=== DEBUG DATA START ===');
-      console.log(dataStr);
-      console.log('=== DEBUG DATA END ===');
-    });
-  }
-
   gameOver() {
     this.pushDebugData();
+    HLRecorder.stop();
     this.survivalHistory.push(Math.floor(this.survivalTime));
     if (this.survivalHistory.length > 50) this.survivalHistory.shift();
     this.state = 'gameover';
@@ -4630,7 +5097,6 @@ class Game {
     }
     this.checkAchievements();
     this.saveProgress();
-    this.dumpDebugData();
   }
 
   drawShopField() {
@@ -5113,13 +5579,20 @@ class Game {
       this.bonusHp = 0;
       this.gold = 0;
       this.claimedMilestones = [];
-      this.survivalHistory = [];
+    this.survivalHistory = [];
+    this.showHighlightGallery = false;
+    this._galleryScrollY = 0;
       // Also clear server save file
       try { fetch('/api/save', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }).catch(() => {}); } catch(e) {}
     }
   }
 
   handleClick(x, y) {
+    if (this.showHighlightGallery) {
+      this._handleGalleryClick(x, y);
+      this.draw();
+      return;
+    }
     // Tutorial overlay intercepts all clicks (with 300ms debounce)
     if (this.showTutorial) {
       const now2 = Date.now();
@@ -5160,6 +5633,13 @@ class Game {
       const joyX = debugX + toggleSize + togglePad * .5;
       if (x > joyX && x < joyX + toggleSize && y > toggleY && y < toggleY + toggleSize) {
         this.joystickEnabled = !this.joystickEnabled;
+        this.saveSettings();
+        this.draw();
+        return;
+      }
+      const recX = joyX + toggleSize + togglePad * .5;
+      if (x > recX && x < recX + toggleSize && y > toggleY && y < toggleY + toggleSize) {
+        this.highlightRecording = !this.highlightRecording;
         this.saveSettings();
         this.draw();
         return;
@@ -5253,7 +5733,14 @@ class Game {
       if (x > CX - btnW / 2 && x < CX + btnW / 2 && y > CY + V * .23 && y < CY + V * .23 + SIZE * .07) {
         this.sharePoster();
       }
-      if (x > CX - SIZE * .14 && x < CX + SIZE * .14 && y > CY + V * .38 - SIZE * .035 && y < CY + V * .38 + SIZE * .017) {
+      const galBtnH = SIZE * .055;
+      const galBtnW = SIZE * .28;
+      const galBtnY = CY + V * .35;
+      if (x > CX - galBtnW / 2 && x < CX + galBtnW / 2 && y > galBtnY - galBtnH * .65 && y < galBtnY - galBtnH * .65 + galBtnH) {
+        this._galleryTouchStartY = undefined; this.showHighlightGallery = true;
+      }
+      const dbgY = galBtnY + SIZE * .05;
+      if (x > CX - SIZE * .14 && x < CX + SIZE * .14 && y > dbgY - SIZE * .012 && y < dbgY + SIZE * .012) {
         this.downloadDebugData();
       }
     } else if (this.state === 'victoryscreen') {
@@ -5270,10 +5757,19 @@ class Game {
       if (x > rightL && x < rightR && y > btnY && y < btnY + btnH) {
         this.sharePoster();
       }
-      const dbgOutY = cardY + cardH + SIZE * .03;
+      const galBtnH2 = cardH * .04;
+      const galBtnW2 = cardW * .32;
+      const galOutY = cardY + cardH + SIZE * .08;
+      if (x > CX - galBtnW2 / 2 && x < CX + galBtnW2 / 2 && y > galOutY - galBtnH2 * .65 && y < galOutY - galBtnH2 * .65 + galBtnH2) {
+        this._galleryTouchStartY = undefined; this.showHighlightGallery = true;
+      }
+      const dbgOutY = galOutY + SIZE * .05;
       const dbgH2 = cardH * .028;
       if (x > CX - SIZE * .14 && x < CX + SIZE * .14 && y > dbgOutY - dbgH2 && y < dbgOutY + dbgH2 / 2) {
         this.downloadDebugData();
+      }
+      if (x > CX - galBtnW2 / 2 && x < CX + galBtnW2 / 2 && y > galOutY - galBtnH2 * .65 && y < galOutY - galBtnH2 * .65 + galBtnH2) {
+        this._galleryTouchStartY = undefined; this.showHighlightGallery = true;
       }
     }
   }
@@ -5565,6 +6061,10 @@ function handleTouchStart(e) {
   touchId = t.identifier;
   touchX = t.clientX;
   touchY = t.clientY;
+  if (game && game.showHighlightGallery) {
+    game._galleryTouchStartY = t.clientY;
+    game._galleryTouchBaseScroll = game._galleryScrollY || 0;
+  }
   const now = Date.now();
   if (game && game.state === 'playing') {
     if (game.showTutorial) { game.handleClick(0, 0); e.preventDefault(); return; }
@@ -5646,6 +6146,20 @@ function handleTouchMove(e) {
       const rect = canvas.getBoundingClientRect();
       const x = (t.clientX - rect.left) / rect.width * CW;
       const y = (t.clientY - rect.top) / rect.height * CH;
+      if (game && game.showHighlightGallery) {
+        const dy = (game._galleryTouchStartY - t.clientY) / rect.height * CH;
+        let sy = (game._galleryTouchBaseScroll || 0) + dy;
+        const clips = HLRecorder.clips;
+        const isMobile = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+        const _s = SIZE * (isMobile ? 1.3 : 1.0);
+        const listH = _s * .6 - _s * .22;
+        const totalListH = clips.length * _s * .075;
+        const maxScroll2 = Math.max(0, totalListH - listH);
+        game._galleryScrollY = Math.max(0, Math.min(sy, maxScroll2));
+        if (game._galleryScrollY !== game._lastScrollLog) { game._lastScrollLog = game._galleryScrollY; console.log('touchScroll', game._galleryScrollY, maxScroll2); }
+        game.draw();
+        break;
+      }
       if (game && game.state === 'playing' && !game.showTutorial) {
         // Joystick drag
         if (game.joystickActive) {
@@ -5966,6 +6480,7 @@ window.addEventListener('error', e => {
 game = new Game();
 window.game = game;
 game.draw();
+HLRecorder.init();
 requestAnimationFrame(gameLoop);
 canvas.addEventListener('mousemove', e => {
   if (!game) return;
@@ -5978,6 +6493,12 @@ canvas.addEventListener('mousemove', e => {
     const btnW = SIZE * .4, btnH = SIZE * .08;
     if (mx > CX - btnW / 2 && mx < CX + btnW / 2 && my > CY + V * .10 && my < CY + V * .10 + btnH) found = '再来一次';
     if (mx > CX - btnW / 2 && mx < CX + btnW / 2 && my > CY + V * .23 && my < CY + V * .23 + SIZE * .07) found = '📸 生成战绩';
+    const galBtnH = SIZE * .055;
+    const galBtnW = SIZE * .28;
+    const galBtnY = CY + V * .35;
+    if (mx > CX - galBtnW / 2 && mx < CX + galBtnW / 2 && my > galBtnY - galBtnH * .65 && my < galBtnY - galBtnH * .65 + galBtnH) found = '📹 精彩回放';
+    const dbgY = galBtnY + SIZE * .05;
+    if (mx > CX - SIZE * .14 && mx < CX + SIZE * .14 && my > dbgY - SIZE * .012 && my < dbgY + SIZE * .012) found = '📥 导出调试数据';
   } else if (game.state === 'victoryscreen') {
     const cardH = CH * .72;
     const cardW = Math.min(CW * .85, cardH * .58);
@@ -5988,6 +6509,12 @@ canvas.addEventListener('mousemove', e => {
     const rightL = CX + btnGap / 2, rightR = CX + btnW + btnGap / 2;
     if (mx > leftL && mx < leftR && my > btnY && my < btnY + btnH) found = '再来一局';
     if (mx > rightL && mx < rightR && my > btnY && my < btnY + btnH) found = '📸 生成战绩';
+    const galBtnH2 = cardH * .04;
+    const galBtnW2 = cardW * .32;
+    const galOutY = cardY + cardH + SIZE * .08;
+    if (mx > CX - galBtnW2 / 2 && mx < CX + galBtnW2 / 2 && my > galOutY - galBtnH2 * .65 && my < galOutY - galBtnH2 * .65 + galBtnH2) found = '📹 精彩回放';
+    const dbgOutY = galOutY + SIZE * .05;
+    if (mx > CX - SIZE * .14 && mx < CX + SIZE * .14 && my > dbgOutY - cardH * .014 && my < dbgOutY + cardH * .014) found = '📥 导出调试数据';
   } else if (game.state === 'shop' || game.state === 'preshop') {
     const sw2 = SIZE * .88, sh2 = SIZE * .7;
     const sy2 = CY - sh2 / 2;
@@ -6024,6 +6551,9 @@ window.addEventListener('resize', () => {
   game.draw();
 });
 document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && game && game.showHighlightGallery) {
+    game.showHighlightGallery = false; game.draw(); e.preventDefault(); return;
+  }
   if (e.key === 'd' || e.key === 'D' || e.key === 'F3') {
     if (game) { game.debugInfo.showDebug = !game.debugInfo.showDebug; game.saveSettings(); game.draw(); }
     e.preventDefault();
@@ -6033,7 +6563,7 @@ document.addEventListener('keydown', e => {
   }
   if (e.key === 'l' || e.key === 'L') {
     if (game) {
-      game.dumpDebugData();
+      game.pushDebugData();
       console.log(`💾 已导出 ${game.debugInfo.record.length} 帧数据`);
     }
   }
@@ -6048,6 +6578,21 @@ document.addEventListener('keydown', e => {
     e.preventDefault();
   }
 });
+canvas.addEventListener('wheel', e => {
+  if (game && game.showHighlightGallery) {
+    let sy = (game._galleryScrollY || 0) + e.deltaY * 0.5;
+    const clips = HLRecorder.clips;
+    const isMobile = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+    const _s = SIZE * (isMobile ? 1.3 : 1.0);
+    const listH = _s * .6 - _s * .22;
+    const totalListH = clips.length * _s * .075;
+    const maxScroll2 = Math.max(0, totalListH - listH);
+    game._galleryScrollY = Math.max(0, Math.min(sy, maxScroll2));
+    if (game._galleryScrollY !== game._lastScrollLog) { game._lastScrollLog = game._galleryScrollY; console.log('wheelScroll', game._galleryScrollY, maxScroll2); }
+    game.draw();
+    e.preventDefault();
+  }
+}, { passive: false });
 </script>
 </body>
 </html>
