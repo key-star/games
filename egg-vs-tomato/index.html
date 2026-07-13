@@ -54,7 +54,7 @@ function resizeCanvas() {
   CY = CH / 2;
   PLATE_MARGIN = Math.max(SIZE * .03, 8);
   EGG_R = SIZE * .045;
-  const dpr = Math.min(window.devicePixelRatio || 1, 3);
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
   canvas.width = CW * dpr;
   canvas.height = CH * dpr;
   if (isTouch) {
@@ -73,6 +73,44 @@ function resizeCanvas() {
   window.__SIZE = SIZE;
 }
 resizeCanvas();
+
+// ---- Cached resources for performance ----
+
+const _cache = {};
+
+function _buildShadowTexture(rx, ry, blur) {
+  const m = blur + 8;
+  const w = Math.ceil(rx * 2 + m * 2), h = Math.ceil(ry * 2 + m * 2);
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  const tc = c.getContext('2d');
+  tc.shadowColor = 'rgba(0,0,0,.15)';
+  tc.shadowBlur = blur;
+  tc.fillStyle = 'rgba(0,0,0,.15)';
+  tc.beginPath();
+  tc.ellipse(w / 2, h / 2, rx, ry, 0, 0, Math.PI * 2);
+  tc.fill();
+  return c;
+}
+
+function _buildCachedResources() {
+  _cache.eggShadow = _buildShadowTexture(EGG_R * 1.05, EGG_R * 1.1, 5);
+  _cache.tomatoShadow = _buildShadowTexture(EGG_R * 0.9, EGG_R * 0.9, 4);
+  _cache.bigShadow = _buildShadowTexture(EGG_R * 1.6, EGG_R * 1.6, 4);
+  _cache.bossShadow = _buildShadowTexture(EGG_R * 2.0, EGG_R * 2.0, 4);
+  _cache.shieldShadow = _buildShadowTexture(EGG_R * 1.3, EGG_R * 1.3, 4);
+  _cache.explosiveShadow = _buildShadowTexture(EGG_R * 1.3, EGG_R * 1.3, 4);
+  _cache.splitterShadow = _buildShadowTexture(EGG_R * 1.1, EGG_R * 1.1, 4);
+  _cache.seedShadow = _buildShadowTexture(EGG_R * 0.5, EGG_R * 0.5, 3);
+}
+_buildCachedResources();
+
+// Rebuild caches on resize
+const _origResize = resizeCanvas;
+resizeCanvas = function() {
+  _origResize();
+  _buildCachedResources();
+};
 
 function wrapText(ctx, text, maxWidth) {
   const lines = [];
@@ -187,7 +225,7 @@ class Egg {
   }
 
   draw(charge = 0) {
-    const [base, shadow] = this.getSkinColor();
+    const [base] = this.getSkinColor();
     ctx.save();
     if (charge > 0) {
       const t = charge * charge * 0.8 + charge * 0.2;
@@ -198,13 +236,8 @@ class Egg {
       ctx.scale(sx, sy);
       ctx.translate(-this.pos.x, -bottomY);
     }
-    ctx.shadowColor = 'rgba(0,0,0,.15)';
-    ctx.shadowBlur = 5;
-    ctx.beginPath();
-    ctx.ellipse(this.pos.x, this.pos.y, this.r * 1.05, this.r * 1.1, 0, 0, Math.PI * 2);
-    ctx.fillStyle = shadow;
-    ctx.fill();
-    ctx.shadowBlur = 0;
+    // Pre-rendered shadow
+    ctx.drawImage(_cache.eggShadow, this.pos.x - _cache.eggShadow.width / 2, this.pos.y - _cache.eggShadow.height / 2);
     ctx.beginPath();
     ctx.ellipse(this.pos.x, this.pos.y - this.r * .05, this.r, this.r * 1.05, 0, 0, Math.PI * 2);
     ctx.fillStyle = base;
@@ -416,13 +449,13 @@ class Tomato {
     const c = this.type === 'boss' ? '#e63946' : this.type === 'big' ? '#f44336' : isShield ? '#4fc3f7' : isSplitter ? '#ab47bc' : isExplosive ? '#ff7043' : isSeed ? '#ffab91' : '#ff6b6b';
     const c2 = this.type === 'boss' ? '#c1121f' : this.type === 'big' ? '#d32f2f' : isShield ? '#0288d1' : isSplitter ? '#7b1fa2' : isExplosive ? '#d84315' : isSeed ? '#ff6e40' : '#ee5a24';
     ctx.save();
-    ctx.shadowColor = 'rgba(0,0,0,.15)';
-    ctx.shadowBlur = 4;
+    // Pre-rendered shadow
+    const sh = isSeed ? _cache.seedShadow : this.type === 'big' ? _cache.bigShadow : this.type === 'boss' ? _cache.bossShadow : isShield || isExplosive ? _cache.shieldShadow : isSplitter ? _cache.splitterShadow : _cache.tomatoShadow;
+    ctx.drawImage(sh, this.pos.x - sh.width / 2, this.pos.y - sh.height / 2);
     ctx.beginPath();
     ctx.arc(this.pos.x, this.pos.y, this.r, 0, Math.PI * 2);
     ctx.fillStyle = c;
     ctx.fill();
-    ctx.shadowBlur = 0;
     // 3D shading
     const grad2 = ctx.createRadialGradient(
       this.pos.x - this.r * .25, this.pos.y - this.r * .3, 0,
@@ -1263,10 +1296,28 @@ const HLRecorder = {
   clips: [],
   _db: null,
   _recording: false,
+  _useWC: false,
+  _logs: [],
+
+  _log(msg) {
+    this._logs.push('[' + new Date().toLocaleTimeString() + '] ' + msg);
+    if (this._logs.length > 50) this._logs.shift();
+  },
+
+  // --- MediaRecorder state ---
   _stream: null,
   _rollingRecorders: [],
   _rollingTimer: null,
   _mime: '',
+
+  // --- WebCodecs state ---
+  _wcEncoder: null,
+  _wcBuffer: [],
+  _wcCaptureTimer: null,
+  _wcFps: 15,
+  _wcPts: 0,
+  _wcSps: null,
+  _wcPps: null,
 
   init() {
     try {
@@ -1320,25 +1371,28 @@ const HLRecorder = {
     tx.objectStore('clips').delete(id);
   },
 
-  isSupported() { return typeof MediaRecorder !== 'undefined' && typeof canvas !== 'undefined' && canvas.captureStream; },
+  isSupported() {
+    return (typeof MediaRecorder !== 'undefined' && typeof canvas !== 'undefined' && canvas.captureStream)
+      || (typeof VideoEncoder !== 'undefined');
+  },
 
-  _createRollingRecorder() {
-    if (!this._recording || !this._stream) return;
-    const t0 = performance.now();
-    const chunks = [];
-    const startTime = t0;
-    const mrOpts = this._mime ? { mimeType: this._mime } : {};
-    const r = new MediaRecorder(this._stream, mrOpts);
-    r.ondataavailable = (e) => { if (e.data && e.data.size > 0 && entry.inUse) chunks.push(e.data); };
-    r.start();
-    const entry = { recorder: r, chunks, startTime, timer: null };
-    entry.timer = setTimeout(() => {
-      if (entry.inUse) return;
-      if (r.state !== 'inactive') { try { r.stop(); } catch(e) {} }
-      const idx = this._rollingRecorders.indexOf(entry);
-      if (idx !== -1) this._rollingRecorders.splice(idx, 1);
-    }, 3000);
-    this._rollingRecorders.push(entry);
+  getCapability() {
+    const hasWC = typeof VideoEncoder !== 'undefined';
+    const hasOC = typeof OffscreenCanvas !== 'undefined';
+    const hasMR = typeof MediaRecorder !== 'undefined' && typeof canvas !== 'undefined' && canvas.captureStream;
+    if (hasWC && hasOC) return 'good';
+    if (hasMR && MediaRecorder.isTypeSupported('video/mp4;codecs=avc1.4D401E')) return 'good';
+    if (hasMR && MediaRecorder.isTypeSupported('video/webm')) return 'poor';
+    return 'unsupported';
+  },
+
+  async _canUseWebCodecs() {
+    try {
+      if (typeof VideoEncoder === 'undefined') { this._log('WC: VideoEncoder 不存在'); return false; }
+      const result = await VideoEncoder.isConfigSupported({ codec: 'avc1.4D401E', width: 16, height: 16 });
+      this._log('WC: avc1.4D401E 检测结果 supported=' + result.supported);
+      return result.supported;
+    } catch(e) { this._log('WC: isConfigSupported 异常 ' + e.message); return false; }
   },
 
   _getPlatform() {
@@ -1348,12 +1402,288 @@ const HLRecorder = {
     return 'desktop';
   },
 
-  start() {
-    if (!this.isSupported()) return;
-    if (this._recording) return;
+  // ========================
+  //  start / stop
+  // ========================
+
+  async start() {
+    if (this._recording) { this._log('start: 已在录制, 跳过'); return; }
+    this._log('start: 开始选择编码器');
+    if (await this._canUseWebCodecs()) {
+      this._useWC = true;
+      this._log('start: 选择 WebCodecs H.264');
+      this._startWC();
+    } else if (typeof MediaRecorder !== 'undefined' && typeof canvas !== 'undefined' && canvas.captureStream) {
+      this._useWC = false;
+      this._log('start: WebCodecs 不可用, 降级 MediaRecorder');
+      this._startMR();
+    } else {
+      this._log('start: 无可用录制方案');
+    }
+  },
+
+  reportFps(_fps) {},
+
+  stop() {
+    this._recording = false;
+    if (this._useWC) { this._stopWC(); }
+    else { this._stopMR(); }
+  },
+
+  // ========================
+  //  WebCodecs implementation
+  // ========================
+
+  _startWC() {
     try {
       const platform = this._getPlatform();
-      const captureFps = (platform === 'ios' || platform === 'android') ? 15 : 30;
+      this._wcFps = 30;
+      this._wcBuffer = [];
+      this._wcPts = 0;
+      this._wcSps = null;
+      this._wcPps = null;
+      const w = canvas.width, h = canvas.height;
+
+      this._wcEncoder = new VideoEncoder({
+        output: (chunk, meta) => {
+          if (chunk.type === 'key') {
+            if (meta && meta.decoderConfig) {
+              const desc = meta.decoderConfig.description;
+              if (desc) {
+                for (let i = 0; i < desc.length - 3; i++) {
+                  if (desc[i] === 0 && desc[i+1] === 0 && desc[i+2] === 0 && desc[i+3] === 1) {
+                    if (desc[i+4] && (desc[i+4] & 0x1f) === 7) { this._wcSps = desc.slice(i); }
+                    else if (desc[i+4] && (desc[i+4] & 0x1f) === 8) { this._wcPps = desc.slice(i); }
+                  }
+                }
+              }
+            }
+          }
+          const buf = new Uint8Array(chunk.byteLength);
+          chunk.copyTo(buf);
+          this._wcBuffer.push({ pts: this._wcPts, data: buf, type: chunk.type });
+          // trim to 6s window
+          const pts6s = this._wcPts - 6_000_000;
+          while (this._wcBuffer.length > 0 && this._wcBuffer[0].pts < pts6s) this._wcBuffer.shift();
+          this._wcPts += Math.round(1_000_000 / this._wcFps);
+        },
+        error: (e) => console.warn('WC encoder err:', e),
+      });
+
+      this._wcEncoder.configure({
+        codec: 'avc1.4D401E',
+        width: w,
+        height: h,
+        bitrate: 4_000_000,
+        framerate: this._wcFps,
+        hardwareAcceleration: 'prefer-hardware',
+        avc: { format: 'annexb' },
+      });
+
+      this._recording = true;
+      this._wcCaptureTimer = setInterval(() => this._captureFrameWC(), 1000 / this._wcFps);
+    } catch(e) { console.warn('HL: WC start fail', e); this._useWC = false; }
+  },
+
+  _stopWC() {
+    if (this._wcCaptureTimer) { clearInterval(this._wcCaptureTimer); this._wcCaptureTimer = null; }
+    if (this._wcEncoder) {
+      try {
+        this._wcEncoder.flush();
+        this._wcEncoder.close();
+      } catch(e) {}
+      this._wcEncoder = null;
+    }
+    this._wcBuffer = [];
+  },
+
+  _captureFrameWC() {
+    if (!this._recording || !this._wcEncoder || this._wcEncoder.state === 'closed') return;
+    try {
+      const frame = new VideoFrame(canvas, { timestamp: this._wcPts });
+      this._wcEncoder.encode(frame, { keyFrame: this._wcBuffer.length === 0 });
+      frame.close();
+    } catch(e) { /* frame may be closed during resize */ }
+  },
+
+  _findFramePts(frames, targetPts) {
+    let lo = 0, hi = frames.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >>> 1;
+      if (frames[mid].pts < targetPts) lo = mid + 1;
+      else hi = mid;
+    }
+    return lo;
+  },
+
+  _saveHighlightWC(type, label, icon, duration) {
+    if (!this._recording) return;
+    const now = Date.now();
+    for (const c of this.clips) {
+      if (c.type === type && now - c.timestamp < 10000) return;
+    }
+    const curPts = this._wcPts;
+    const targetPts = curPts - 3_000_000;
+    const startIdx = this._findFramePts(this._wcBuffer, targetPts);
+    const prelude = this._wcBuffer.slice(startIdx);
+    if (prelude.length === 0) return;
+    const captureFrames = [...prelude];
+    const targetFrames = Math.ceil(duration * this._wcFps);
+    let captureCount = 0;
+    const capTimer = setInterval(() => {
+      if (!this._recording || !this._wcEncoder) { clearInterval(capTimer); return; }
+      captureCount++;
+      if (captureCount >= targetFrames) {
+        clearInterval(capTimer);
+        this._finalizeHighlightWC(captureFrames, type, label, icon, now, duration);
+      }
+    }, 1000 / this._wcFps);
+    setTimeout(() => {
+      clearInterval(capTimer);
+      this._finalizeHighlightWC(captureFrames, type, label, icon, now, duration);
+    }, duration * 1000 + 500);
+  },
+
+  async _finalizeHighlightWC(frames, type, label, icon, now, duration) {
+    if (frames.length === 0) return;
+    try {
+      const blob = await this._muxH264ToMp4(frames, canvas.width, canvas.height, this._wcFps);
+      this._saveClipToDB(blob, { type, label, icon, timestamp: now, duration, fps: this._wcFps });
+    } catch(e) { console.warn('HL: WC mux fail', e); }
+  },
+
+  // ========================
+  //  MP4 Muxer (minimal H.264)
+  // ========================
+
+  _muxH264ToMp4(frames, w, h, fps) {
+    const sps = this._wcSps;
+    const pps = this._wcPps;
+    if (!sps || !pps) { return Promise.reject('no sps/pps'); }
+
+    const u32 = (v) => { const b = new Uint8Array(4); new DataView(b.buffer).setUint32(0, v); return b; };
+    const u16 = (v) => { const b = new Uint8Array(2); new DataView(b.buffer).setUint16(0, v); return b; };
+    const u8 = (v) => new Uint8Array([v]);
+    const fourcc = (s) => new TextEncoder().encode(s);
+    const box = (type, ...parts) => {
+      const data = concatU8(...parts);
+      return concatU8(u32(8 + data.length), type, data);
+    };
+    const fullBox = (type, version, flags, ...parts) => {
+      return box(type, u8(version), u8(flags>>16), u8(flags>>8), u8(flags), ...parts);
+    };
+    const concatU8 = (...arrays) => {
+      let len = 0; for (const a of arrays) len += a.length;
+      const r = new Uint8Array(len); let o = 0;
+      for (const a of arrays) { r.set(a, o); o += a.length; }
+      return r;
+    };
+
+    const sampleData = concatU8(...frames.map(f => {
+      const lenPref = u32(f.data.length);
+      return concatU8(lenPref, f.data);
+    }));
+
+    const avcC = (() => {
+      // parse SPS for width/height and profile info
+      let profile = 0x42, profileCompat = 0, level = 0x1e;
+      if (sps.length >= 4) { profile = sps[1]; profileCompat = sps[2]; level = sps[3]; }
+      return box(fourcc('avcC'),
+        u8(1),              // version
+        u8(profile),        // profile
+        u8(profileCompat),  // profile-compatibility
+        u8(level),          // level
+        u8(0xfc | 3),       // 6 bits reserved + 2 bits NAL length size - 1 (4 bytes)
+        u8(0xe0 | 1),       // 3 bits reserved + number of SPS (1)
+        // SPS
+        u16(sps.length), sps,
+        u8(1),              // number of PPS (1)
+        // PPS
+        u16(pps.length), pps,
+      );
+    })();
+
+    const stsd = box(fourcc('stsd'),
+      u32(0),               // version 0, 1 entry
+      box(fourcc('avc1'),
+        u32(0), u16(0), u16(1),  // reserved, data ref index
+        u16(0), u16(0),          // pre-defined
+        u32(0), u32(0), u32(0),  // reserved
+        u16(w), u16(h),          // width, height
+        u32(0x00480000), u32(0x00480000), // dar (1:1)
+        u16(0), u16(0),          // frames per sample, reserved
+        u8(24), u8(0x11),       // depth, color table id
+        u16(0xffff), u16(0xffff), // pre-defined
+        avcC,
+      ),
+    );
+
+    const timescale = fps * 100;
+    const sampleCount = frames.length;
+    const sampleDurs = new Array(sampleCount).fill(timescale / fps);
+    const sttsEntries = [];
+    for (let i = 0; i < sampleCount;) {
+      const dur = sampleDurs[i];
+      let count = 1;
+      while (i + count < sampleCount && sampleDurs[i + count] === dur) count++;
+      sttsEntries.push({ count, dur });
+      i += count;
+    }
+    const sttsData = concatU8(u32(sttsEntries.length), ...sttsEntries.map(e => concatU8(u32(e.count), u32(e.dur))));
+    const stscData = concatU8(u32(1), u32(1), u32(1), u32(1));
+    const stszData = concatU8(u32(0), ...frames.map(f => u32(4 + f.data.length)));
+    // stco with placeholders
+    const dataOffsetPos = 0; // will patch
+    const stcoData = concatU8(u32(1), u32(0)); // 1 chunk at offset 0 (placeholder)
+
+    const moov = box(fourcc('moov'),
+      fullBox(fourcc('mvhd'), 0, 0, u32(0), u32(0), u32(timescale), u32(sampleCount / fps * timescale), u32(0x00010000), u16(0x0100), u16(0), u32(0), u32(0), u32(0), u32(0), u32(0x00010000), u32(0), u32(0), u32(0), u32(0), u32(0), u32(0), u32(0), u32(0xffffffff)),
+      box(fourcc('trak'),
+        fullBox(fourcc('tkhd'), 0, 0x0007, u32(1), u32(0), u32(0), u32(0), u32(0), u32(0), u32(0), u32(0), u32(0), u16(0), u16(0), u32(0), u32(0), u32(0), u32(0x00010000), u32(w << 16), u32(h << 16), u32(0x40000000), u32(0), u32(0x40000000), u32(0)),
+        box(fourcc('mdia'),
+          fullBox(fourcc('mdhd'), 0, 0, u32(0), u32(0), u32(timescale), u32(sampleCount / fps * timescale), u16(0), u16(0)),
+          fullBox(fourcc('hdlr'), 0, 0, fourcc('vide'), u32(0), u32(0), u32(0)),
+          box(fourcc('minf'),
+            fullBox(fourcc('vmhd'), 0, 0x0001, u16(0), u16(0)),
+            box(fourcc('dinf'), box(fourcc('dref'), u32(0), u32(1), fullBox(fourcc('url '), 0, 0x0001))),
+            box(fourcc('stbl'),
+              stsd,
+              box(fourcc('stts'), u32(0), sttsData),
+              box(fourcc('stsc'), u32(0), stscData),
+              box(fourcc('stsz'), u32(0), stszData),
+              box(fourcc('stco'), u32(0), stcoData),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    const mdat = box(fourcc('mdat'), sampleData);
+    const ftyp = box(fourcc('ftyp'), fourcc('isom'), u32(0x200), fourcc('isom'), fourcc('iso2'), fourcc('avc1'));
+
+    const result = concatU8(ftyp, moov, mdat);
+
+    // patch stco offset (point to after moov)
+    const mdatOffset = ftyp.length + moov.length;
+    const stcoBox = box(fourcc('stco'), u32(0), u32(1), u32(mdatOffset + 8));
+    const patchedMoov = concatU8(
+      moov.subarray(0, moov.length - stcoData.length - 8),
+      stcoBox,
+    );
+    const patchedResult = concatU8(ftyp, patchedMoov, mdat);
+
+    return Promise.resolve(new Blob([patchedResult], { type: 'video/mp4' }));
+  },
+
+  // ========================
+  //  MediaRecorder implementation (existing)
+  // ========================
+
+  _startMR() {
+    try {
+      const platform = this._getPlatform();
+      const captureFps = 30;
+      this._captureFps = captureFps;
       const videoTrack = canvas.captureStream(captureFps).getVideoTracks()[0];
       let audioTrack = null;
       try { SFX._init(); if (SFX._dest) audioTrack = SFX._dest.stream.getAudioTracks()[0]; } catch(e) {}
@@ -1377,9 +1707,16 @@ const HLRecorder = {
                  'video/mp4;codecs=hvc1', 'video/mp4;codecs=hev1'];
       }
       let mime = '';
-      for (const t of types) { if (MediaRecorder.isTypeSupported(t)) { mime = t; break; } }
+      for (const t of types) {
+        const ok = MediaRecorder.isTypeSupported(t);
+        this._log('MR: ' + t + ' -> ' + (ok ? '支持' : '不支持'));
+        if (ok) { mime = t; break; }
+      }
       if (!mime) {
+        this._log('MR: 所有指定 MIME 均不支持, 使用浏览器默认');
         console.warn('HL: no specific mime supported, trying default');
+      } else {
+        this._log('MR: 选中 ' + mime);
       }
       this._mime = mime;
       this._recording = true;
@@ -1388,9 +1725,7 @@ const HLRecorder = {
     } catch(e) { console.warn('HL: start fail', e); }
   },
 
-  reportFps(_fps) {},
-
-  stop() {
+  _stopMR() {
     this._recording = false;
     if (this._rollingTimer) { clearInterval(this._rollingTimer); this._rollingTimer = null; }
     for (const entry of this._rollingRecorders) {
@@ -1403,15 +1738,40 @@ const HLRecorder = {
     if (this._stream) { this._stream.getVideoTracks().forEach(t => t.stop()); this._stream = null; }
   },
 
+  _createRollingRecorder() {
+    if (!this._recording || !this._stream) return;
+    const t0 = performance.now();
+    const chunks = [];
+    const startTime = t0;
+    const mrOpts = this._mime ? { mimeType: this._mime, videoBitsPerSecond: 4000000 } : { videoBitsPerSecond: 4000000 };
+    const r = new MediaRecorder(this._stream, mrOpts);
+    r.ondataavailable = (e) => { if (e.data && e.data.size > 0 && entry.inUse) chunks.push(e.data); };
+    r.start();
+    const entry = { recorder: r, chunks, startTime, timer: null };
+    entry.timer = setTimeout(() => {
+      if (entry.inUse) return;
+      if (r.state !== 'inactive') { try { r.stop(); } catch(e) {} }
+      const idx = this._rollingRecorders.indexOf(entry);
+      if (idx !== -1) this._rollingRecorders.splice(idx, 1);
+    }, 3000);
+    this._rollingRecorders.push(entry);
+  },
+
   saveHighlight(type, label, icon, duration = 10) {
     if (!this._recording) return;
-    const t0 = performance.now();
     const now = Date.now();
     for (const c of this.clips) {
       if (c.type === type && now - c.timestamp < 10000) return;
     }
-    if (this._rollingRecorders.length === 0) return;
+    if (this._useWC) {
+      this._saveHighlightWC(type, label, icon, duration);
+    } else {
+      this._saveHighlightMR(type, label, icon, duration);
+    }
+  },
 
+  _saveHighlightMR(type, label, icon, duration) {
+    if (this._rollingRecorders.length === 0) return;
     const perfNow = performance.now();
     const targetStart = perfNow - 3000;
     let best = null, bestDiff = Infinity;
@@ -1424,7 +1784,6 @@ const HLRecorder = {
 
     best.inUse = true;
     if (best.timer) { clearTimeout(best.timer); best.timer = null; }
-
     try { best.recorder.requestData(); } catch(e) {}
     const ri = setInterval(() => {
       if (best.recorder && best.recorder.state !== 'inactive') {
@@ -1434,6 +1793,7 @@ const HLRecorder = {
 
     const preludeMs = perfNow - best.startTime;
     const totalDuration = Math.round((preludeMs + duration * 1000) / 1000);
+    const now = Date.now();
 
     best.recorder.onstop = () => {
       clearInterval(ri);
@@ -1443,7 +1803,7 @@ const HLRecorder = {
         const actualDur = Math.max(1, best.chunks.length);
         const actualType = best.chunks[0].type || this._mime;
         const blob = new Blob(best.chunks, { type: actualType });
-        this._saveClipToDB(blob, { type, label, icon, timestamp: now, duration: totalDuration });
+        this._saveClipToDB(blob, { type, label, icon, timestamp: now, duration: totalDuration, fps: this._captureFps });
       }
     };
 
@@ -1458,23 +1818,34 @@ const HLRecorder = {
     return Promise.resolve(blob);
   },
 
-  downloadClip(clip) {
-    if (!clip || !clip.blob) return;
-    if (!this._isAndroidWeChat()) {
-      const url = URL.createObjectURL(clip.blob);
-      const ts = new Date(); const fmt = ts.getFullYear() + ('0'+(ts.getMonth()+1)).slice(-2) + ('0'+ts.getDate()).slice(-2) + '_' + ('0'+ts.getHours()).slice(-2) + ('0'+ts.getMinutes()).slice(-2) + ('0'+ts.getSeconds()).slice(-2);
-      const mt = (clip.blob.type || '').split(';')[0].split('/')[1] || 'webm';
+  // ========================
+  //  Common methods (download, play, etc.)
+  // ========================
+
+  _saveClip(blob, filename) {
+    const file = new File([blob], filename, { type: blob.type });
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      navigator.share({ files: [file], title: '精彩回放' }).catch(() => {});
+    } else {
+      const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
-      a.href = url; a.download = `highlight_${clip.type}_${fmt}.${mt}`;
+      a.href = url; a.download = filename;
       a.style.display = 'none';
       document.body.appendChild(a);
       a.click();
       setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 2000);
+    }
+  },
+
+  downloadClip(clip) {
+    if (!clip || !clip.blob) return;
+    const ts = new Date(); const fmt = ts.getFullYear() + ('0'+(ts.getMonth()+1)).slice(-2) + ('0'+ts.getDate()).slice(-2) + '_' + ('0'+ts.getHours()).slice(-2) + ('0'+ts.getMinutes()).slice(-2) + ('0'+ts.getSeconds()).slice(-2);
+    const mt = (clip.blob.type || '').split(';')[0].split('/')[1] || 'mp4';
+    const name = `highlight_${clip.type}_${fmt}.${mt}`;
+    if (!this._isAndroidWeChat()) {
+      this._saveClip(clip.blob, name);
       return;
     }
-    const ts = new Date(); const fmt = ts.getFullYear() + ('0'+(ts.getMonth()+1)).slice(-2) + ('0'+ts.getDate()).slice(-2) + '_' + ('0'+ts.getHours()).slice(-2) + ('0'+ts.getMinutes()).slice(-2) + ('0'+ts.getSeconds()).slice(-2);
-    const mt = (clip.blob.type || '').split(';')[0].split('/')[1] || 'webm';
-    const name = `highlight_${clip.type}_${fmt}.${mt}`;
     this._showClipOverlay(null, '上传中...');
     (async () => {
       try {
@@ -1578,15 +1949,35 @@ const HLRecorder = {
     this._deleteClipFromDB(id);
   },
 
+  getLogs() { return this._logs.slice(); },
+
   getStats() {
+    const now = performance.now();
+    if (this._useWC) {
+      const estBytes = this._wcBuffer.reduce((s, f) => s + f.data.length, 0);
+      return {
+        active: 1,
+        inUse: 0,
+        chunks: this._wcBuffer.length,
+        bytes: estBytes,
+        codec: 'avc1.4D401E',
+        recorders: [{ state: 'recording', inUse: false, chunks: this._wcBuffer.length, age: ((now - (this._wcBuffer[0]?.pts || 0) / 1000) / 1000).toFixed(1) + 's' }],
+      };
+    }
     let active = 0, inUse = 0, chunks = 0, bytes = 0, codec = this._mime;
+    const recorders = this._rollingRecorders.map(e => ({
+      state: e.recorder ? e.recorder.state : 'no-recorder',
+      inUse: !!e.inUse,
+      chunks: e.chunks.length,
+      age: ((now - e.startTime) / 1000).toFixed(1) + 's',
+    }));
     for (const e of this._rollingRecorders) {
       if (e.recorder && e.recorder.state !== 'inactive') active++;
       if (e.inUse) inUse++;
       chunks += e.chunks.length;
       for (const c of e.chunks) bytes += c.size;
     }
-    return { active, inUse, chunks, bytes, codec };
+    return { active, inUse, chunks, bytes, codec, recorders };
   },
 };
 
@@ -1715,7 +2106,32 @@ class Game {
     this.hpBarDisplay = 3;
     this.gameMode = 'challenge';
     this.generateGoal();
-    this.debugInfo = { fps: 0, dt: 0, frameCount: 0, fpsTimer: 0, showDebug: false, record: [], errors: [], audioLog: [] };
+        this.debugInfo = { fps: 0, dt: 0, frameCount: 0, fpsTimer: 0, showDebug: false, record: [], errors: [], audioLog: [] };
+        // GPU / Canvas 检测
+        (() => {
+          const info = { canvasPixels: 0 };
+          try {
+            const gl = document.createElement('canvas').getContext('webgl') || document.createElement('canvas').getContext('experimental-webgl');
+            if (gl) {
+              const ext = gl.getExtension('WEBGL_debug_renderer_info');
+              info.webgl = true;
+              info.renderer = ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : 'N/A';
+              info.vendor = ext ? gl.getParameter(ext.UNMASKED_VENDOR_WEBGL) : 'N/A';
+            } else {
+              info.webgl = false;
+              info.renderer = 'N/A (WebGL not available)';
+            }
+          } catch(e) { info.webgl = false; info.renderer = 'Error: ' + e.message; }
+          try {
+            const tc = document.createElement('canvas');
+            tc.width = 640; tc.height = 480;
+            const tctx = tc.getContext('2d');
+            const t0 = performance.now();
+            for (let i = 0; i < 50; i++) { tctx.fillStyle = '#000'; tctx.fillRect(0, 0, 640, 480); }
+            info.fillBench = ((performance.now() - t0) / 50).toFixed(2);
+          } catch(e) { info.fillBench = 'N/A'; }
+          this.debugInfo.renderInfo = info;
+        })();
     this.debugPendingDownload = null;
 
     resizeCanvas();
@@ -4361,9 +4777,12 @@ class Game {
         `鼠标: (${this.mouseX.toFixed(1)}, ${this.mouseY.toFixed(1)})`,
         `波次: ${this.wave} | 生存: ${this.survivalTime.toFixed(1)}s`,
         `错误: ${this.debugInfo.errors.length}`,
+        this.debugInfo.renderInfo ? `WebGL: ${this.debugInfo.renderInfo.webgl} | ${this.debugInfo.renderInfo.renderer}` : '',
+        `Canvas: ${this.debugInfo.renderInfo ? this.debugInfo.renderInfo.canvasPixels + 'px' : ''} | fill: ${this.debugInfo.renderInfo ? this.debugInfo.renderInfo.fillBench + 'ms' : ''}`,
         `音效: ${SFX._ctx ? SFX._ctx.state : '无'}`,
         this.gravityField ? `🌀引力 ${this.gravityField.timer.toFixed(0)}f @(${this.gravityField.x.toFixed(0)},${this.gravityField.y.toFixed(0)})` : '',
         `buff: ⚡${this.chainLightningStored} 🛡${this.shieldTimer > 0 ? Math.ceil(this.shieldTimer/60)+'s' : this.storedShield} 🔥${this.fireShellTimer > 0 ? Math.ceil(this.fireShellTimer/60)+'s' : 0}`,
+        HLRecorder._recording ? `录: ${HLRecorder._useWC ? 'H.264 WC' : (HLRecorder._mime ? HLRecorder._mime.replace(/^video\//,'').replace(';codecs=',' ') : 'MR')} ${HLRecorder._useWC ? '帧:'+(HLRecorder._wcBuffer?.length||0) : '滚:'+(HLRecorder._rollingRecorders?.length||0)}` : '',
       ].filter(Boolean);
       ctx.save();
       ctx.font = '12px monospace';
@@ -4585,7 +5004,7 @@ class Game {
     ctx.textAlign = 'center';
     ctx.fillText(`📹 精彩回放 (${HLRecorder.clips.length})`, CX, galBtnY - galBtnH * .15);
     // Download debug data
-    const dbgY = galBtnY + SIZE * .05;
+    const dbgY = galBtnY + SIZE * .12;
     ctx.fillStyle = '#546e7a';
     ctx.font = `${SIZE * .024}px Arial`;
     ctx.textAlign = 'center';
@@ -4858,7 +5277,7 @@ class Game {
     ctx.textAlign = 'center';
     ctx.fillText(`📹 精彩回放 (${HLRecorder.clips.length})`, CX, galOutY - galBtnH2 * .15);
     // Download debug data
-    const dbgOutY = galOutY + SIZE * .05;
+    const dbgOutY = galOutY + SIZE * .12;
     ctx.fillStyle = '#90a4ae';
     ctx.font = `${cardH * .024}px Arial`;
     ctx.textAlign = 'center';
@@ -4921,10 +5340,13 @@ class Game {
       state: this.state, gameMode: this.gameMode,
       comboCount: this.comboCount, maxCombo: this.maxCombo
     };
-    const recorderState = HLRecorder._recording ? (() => { const s = HLRecorder.getStats(); return { recording: true, active: s.active, inUse: s.inUse, chunks: s.chunks, bytes: s.bytes, mime: s.codec }; })() : { recording: false };
-    const highlights = HLRecorder.clips.map(c => ({ type: c.type, label: c.label, icon: c.icon, timestamp: c.timestamp, duration: c.duration, bytes: c.blob?.size || 0, mime: c.blob?.type || '' }));
+    const recPath = HLRecorder._useWC ? 'webcodecs' : 'mediarecorder';
+    const recCodec = HLRecorder._mime || 'avc1.4D401E';
+    const recorderState = HLRecorder._recording ? { recording: true, path: recPath, codec: recCodec, ...HLRecorder.getStats() } : { recording: false, path: recPath, codec: recCodec };
+    const highlights = HLRecorder.clips.map(c => ({ type: c.type, label: c.label, icon: c.icon, timestamp: c.timestamp, duration: c.duration, fps: c.fps, bytes: c.blob?.size || 0, mime: c.blob?.type || '' }));
     const platformTag = sys.platform + '_' + sys.browser;
-    const dataStr = JSON.stringify({ system: sys, summary, gameState, frames: r.slice(-300), errors: this.debugInfo.errors, audioLog: this.debugInfo.audioLog, recorderState, highlights, ts: Date.now(), platformTag });
+    const renderInfo = this.debugInfo.renderInfo || {};
+    const dataStr = JSON.stringify({ system: sys, summary, gameState, frames: r.slice(-300), errors: this.debugInfo.errors, audioLog: this.debugInfo.audioLog, recorderState, highlights, renderInfo, recorderLogs: HLRecorder.getLogs(), ts: Date.now(), platformTag });
     const serverUrl = window.location.origin;
     fetch(serverUrl + '/api/debug', {
       method: 'POST',
@@ -5148,9 +5570,11 @@ class Game {
       state: this.state, gameMode: this.gameMode,
       comboCount: this.comboCount, maxCombo: this.maxCombo
     };
-    const recorderState = HLRecorder._recording ? (() => { const s = HLRecorder.getStats(); return { recording: true, active: s.active, inUse: s.inUse, chunks: s.chunks, bytes: s.bytes, mime: s.codec }; })() : { recording: false };
-    const highlights = HLRecorder.clips.map(c => ({ type: c.type, label: c.label, icon: c.icon, timestamp: c.timestamp, duration: c.duration, bytes: c.blob?.size || 0, mime: c.blob?.type || '' }));
-    const data = { system: sys, summary, gameState, frames: r.slice(-300), errors: this.debugInfo.errors, audioLog: this.debugInfo.audioLog, recorderState, highlights, ts: Date.now() };
+    const recPath = HLRecorder._useWC ? 'webcodecs' : 'mediarecorder';
+    const recCodec = HLRecorder._mime || 'avc1.4D401E';
+    const recorderState = HLRecorder._recording ? (() => { const s = HLRecorder.getStats(); return { recording: true, path: recPath, codec: recCodec, active: s.active, inUse: s.inUse, chunks: s.chunks, bytes: s.bytes, mime: s.codec }; })() : { recording: false, path: recPath, codec: recCodec };
+    const highlights = HLRecorder.clips.map(c => ({ type: c.type, label: c.label, icon: c.icon, timestamp: c.timestamp, duration: c.duration, fps: c.fps, bytes: c.blob?.size || 0, mime: c.blob?.type || '' }));
+    const data = { system: sys, summary, gameState, frames: r.slice(-300), errors: this.debugInfo.errors, audioLog: this.debugInfo.audioLog, recorderState, highlights, recorderLogs: HLRecorder.getLogs(), ts: Date.now() };
     const json = JSON.stringify(data, null, 2);
     const blob = new Blob([json], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
@@ -5751,7 +6175,18 @@ class Game {
       }
       const recX = joyX + toggleSize + togglePad * .5;
       if (x > recX && x < recX + toggleSize && y > toggleY && y < toggleY + toggleSize) {
-        this.highlightRecording = !this.highlightRecording;
+        const newVal = !this.highlightRecording;
+        if (newVal) {
+          const cap = HLRecorder.getCapability();
+          if (cap === 'unsupported') {
+            this.showMessage('当前浏览器不支持录制', 120);
+            return;
+          }
+          if (cap === 'poor') {
+            this.showMessage('当前浏览器录制性能较差，推荐使用 Chrome', 180);
+          }
+        }
+        this.highlightRecording = newVal;
         this.saveSettings();
         this.draw();
         return;
@@ -5851,7 +6286,7 @@ class Game {
       if (x > CX - galBtnW / 2 && x < CX + galBtnW / 2 && y > galBtnY - galBtnH * .65 && y < galBtnY - galBtnH * .65 + galBtnH) {
         this._galleryTouchStartY = undefined; this.showHighlightGallery = true;
       }
-      const dbgY = galBtnY + SIZE * .05;
+      const dbgY = galBtnY + SIZE * .12;
       if (x > CX - SIZE * .14 && x < CX + SIZE * .14 && y > dbgY - SIZE * .012 && y < dbgY + SIZE * .012) {
         this.downloadDebugData();
       }
@@ -5875,7 +6310,7 @@ class Game {
       if (x > CX - galBtnW2 / 2 && x < CX + galBtnW2 / 2 && y > galOutY - galBtnH2 * .65 && y < galOutY - galBtnH2 * .65 + galBtnH2) {
         this._galleryTouchStartY = undefined; this.showHighlightGallery = true;
       }
-      const dbgOutY = galOutY + SIZE * .05;
+      const dbgOutY = galOutY + SIZE * .12;
       const dbgH2 = cardH * .028;
       if (x > CX - SIZE * .14 && x < CX + SIZE * .14 && y > dbgOutY - dbgH2 && y < dbgOutY + dbgH2 / 2) {
         this.downloadDebugData();
@@ -5888,7 +6323,7 @@ class Game {
 
   sharePoster() {
     const PW = 540, PH = 780;
-    const dpr = Math.min(window.devicePixelRatio || 1, 3);
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
     const c = document.createElement('canvas');
     c.width = PW * dpr; c.height = PH * dpr;
     const pctx = c.getContext('2d');
@@ -6593,6 +7028,7 @@ window.addEventListener('error', e => {
 });
 game = new Game();
 window.game = game;
+if (game.debugInfo.renderInfo) game.debugInfo.renderInfo.canvasPixels = canvas.width + '×' + canvas.height;
 game.draw();
 HLRecorder.init();
 requestAnimationFrame(gameLoop);
@@ -6611,7 +7047,7 @@ canvas.addEventListener('mousemove', e => {
     const galBtnW = SIZE * .28;
     const galBtnY = CY + V * .35;
     if (mx > CX - galBtnW / 2 && mx < CX + galBtnW / 2 && my > galBtnY - galBtnH * .65 && my < galBtnY - galBtnH * .65 + galBtnH) found = '📹 精彩回放';
-    const dbgY = galBtnY + SIZE * .05;
+    const dbgY = galBtnY + SIZE * .12;
     if (mx > CX - SIZE * .14 && mx < CX + SIZE * .14 && my > dbgY - SIZE * .012 && my < dbgY + SIZE * .012) found = '📥 导出调试数据';
   } else if (game.state === 'victoryscreen') {
     const cardH = CH * .72;
@@ -6627,7 +7063,7 @@ canvas.addEventListener('mousemove', e => {
     const galBtnW2 = cardW * .32;
     const galOutY = cardY + cardH + SIZE * .08;
     if (mx > CX - galBtnW2 / 2 && mx < CX + galBtnW2 / 2 && my > galOutY - galBtnH2 * .65 && my < galOutY - galBtnH2 * .65 + galBtnH2) found = '📹 精彩回放';
-    const dbgOutY = galOutY + SIZE * .05;
+    const dbgOutY = galOutY + SIZE * .12;
     if (mx > CX - SIZE * .14 && mx < CX + SIZE * .14 && my > dbgOutY - cardH * .014 && my < dbgOutY + cardH * .014) found = '📥 导出调试数据';
   } else if (game.state === 'shop' || game.state === 'preshop') {
     const sw2 = SIZE * .88, sh2 = SIZE * .7;
