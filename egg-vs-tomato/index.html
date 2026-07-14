@@ -783,6 +783,14 @@ const SHOP_BUFFS = [
   { id: 'shield', name: '护盾', icon: '🛡️', desc: '获得3秒护盾', cost: 20 },
 ];
 
+const CHALLENGE_WAVES = [
+  { surgeCount: 3, surgeInterval: 60, retreatInterval: 9999, speedMult: 1.0, cap: 4,  types: ['basic'] },
+  { surgeCount: 5, surgeInterval: 48, retreatInterval: 180, speedMult: 1.15, cap: 7,  types: ['basic','big'] },
+  { surgeCount: 6, surgeInterval: 36, retreatInterval: 120, speedMult: 1.30, cap: 10, types: ['basic','big','shield'] },
+  { surgeCount: 8, surgeInterval: 24, retreatInterval: 90,  speedMult: 1.50, cap: 14, types: ['basic','big','shield','splitter'] },
+  { surgeCount: 10, surgeInterval: 15, retreatInterval: 60,  speedMult: 1.70, cap: 18, types: ['basic','big','shield','splitter','explosive'] },
+];
+
 // ───── Sound Manager (Web Audio API + WAV files for BGM/jingles) ─────
 const SFX = {
   _ctx: null,
@@ -1863,7 +1871,7 @@ const HLRecorder = {
     overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,.85);z-index:9999;display:flex;flex-direction:column;align-items:center;justify-content:center;';
     const close = document.createElement('div');
     close.textContent = '✕';
-    close.style.cssText = 'position:absolute;top:16px;right:20px;font-size:24px;color:#fff;cursor:pointer;z-index:10000;padding:8px;';
+    close.style.cssText = 'position:absolute;top:16px;right:20px;font-size:24px;color:#555;cursor:pointer;z-index:10000;padding:8px;';
     close.onclick = () => this._hideClipOverlay();
     overlay.appendChild(close);
     if (url) {
@@ -1908,7 +1916,7 @@ const HLRecorder = {
     overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,.85);z-index:9999;display:flex;flex-direction:column;align-items:center;justify-content:center;';
     const close = document.createElement('div');
     close.textContent = '✕';
-    close.style.cssText = 'position:absolute;top:16px;right:20px;font-size:24px;color:#fff;cursor:pointer;z-index:10000;padding:8px;';
+    close.style.cssText = 'position:absolute;top:16px;right:20px;font-size:24px;color:#555;cursor:pointer;z-index:10000;padding:8px;';
     close.onclick = () => { document.body.removeChild(overlay); URL.revokeObjectURL(url); };
     overlay.appendChild(close);
     const v = document.createElement('video');
@@ -1935,7 +1943,7 @@ const HLRecorder = {
     v.addEventListener('ended', () => { v.pause(); });
     const close = document.createElement('div');
     close.textContent = '✕';
-    close.style.cssText = 'position:absolute;top:16px;right:20px;font-size:28px;color:#fff;cursor:pointer;z-index:10000;';
+    close.style.cssText = 'position:absolute;top:16px;right:20px;font-size:24px;color:#555;cursor:pointer;z-index:10000;padding:8px;';
     close.onclick = () => { document.body.removeChild(overlay); URL.revokeObjectURL(url); };
     overlay.appendChild(v);
     overlay.appendChild(close);
@@ -2031,6 +2039,11 @@ class Game {
     this.waveWaitTimer = 0;
     this.waveCalmTimer = 0;
     this.waveCleanupMode = 'A';
+    this.challengeWavePhase = 'surge';
+    this.challengeWavePhaseTimer = 0;
+    this.challengeSurgeSpawned = 0;
+    this.challengeWaveTimer = 0;
+    this.challengeMinSpawnTimer = 0;
     // Plate shrink/expand
     this.defaultUnit = 0;
     this.shrinkTimer = 0;
@@ -2321,6 +2334,10 @@ class Game {
     if (this.gameMode === 'endless') {
       return (1 + this.difficulty * 0.03) * (SIZE / 400);
     }
+    if (this.gameMode === 'challenge') {
+      const i = Math.min(this.wave - 1, CHALLENGE_WAVES.length - 1);
+      return CHALLENGE_WAVES[i].speedMult * (SIZE / 400);
+    }
     let waveMult = 1 + this.wave * 0.02;
     if (this.wave > 6) waveMult += (this.wave - 6) * 0.02;
     return waveMult * (SIZE / 400);
@@ -2329,6 +2346,10 @@ class Game {
   getTomatoCap() {
     if (this.gameMode === 'endless') {
       return Math.floor(5 + this.difficulty * 0.8);
+    }
+    if (this.gameMode === 'challenge') {
+      const i = Math.min(this.wave - 1, CHALLENGE_WAVES.length - 1);
+      return CHALLENGE_WAVES[i].cap;
     }
     return Math.min(10 + this.wave, 20);
   }
@@ -2515,6 +2536,13 @@ class Game {
     this.wave = 1;
     if (this.gameMode === 'endless') {
       this.waveState = 'endless';
+    } else if (this.gameMode === 'challenge') {
+      this.waveState = 'challenge';
+      this.challengeWavePhase = 'surge';
+      this.challengeWavePhaseTimer = 240;
+      this.challengeSurgeSpawned = 0;
+      this.challengeWaveTimer = 0;
+      this.challengeMinSpawnTimer = 0;
     } else {
       this.waveState = 'preparing';
       this.wavePrepTimer = 90;
@@ -3616,6 +3644,7 @@ class Game {
   }
 
   updateWaves(dt) {
+    if (this.gameMode === 'challenge') { this.updateChallengeWaves(dt); return; }
     if (this.waveState === 'preparing') {
       if (this._intensityWave !== this.wave) {
         this._intensityWave = this.wave;
@@ -3681,6 +3710,52 @@ class Game {
         this.wavePrepTimer = Math.max(25, basePrep - this.wave * 3);
       }
     }
+  }
+
+  updateChallengeWaves(dt) {
+    this.challengeWaveTimer += dt;
+    const waveIdx = Math.min(this.wave - 1, CHALLENGE_WAVES.length - 1);
+    const params = CHALLENGE_WAVES[waveIdx];
+    if (this.challengeWaveTimer >= 720) {
+      this.wave++;
+      this.challengeWaveTimer = 0;
+      this.challengeWavePhase = 'surge';
+      this.challengeWavePhaseTimer = 240;
+      this.challengeSurgeSpawned = 0;
+      this.spawnTimer = 0;
+      // if (this.wave <= 5) this.showMessage(`🌊 第 ${this.wave} 波！`, 40);
+    }
+    this.challengeWavePhaseTimer -= dt;
+    if (this.challengeWavePhase === 'surge' && this.challengeWavePhaseTimer <= 0) {
+      this.challengeWavePhase = 'retreat';
+    }
+    this.spawnTimer += dt;
+    const cap = this.getTomatoCap();
+    if (this.challengeWavePhase === 'surge') {
+      if (this.challengeSurgeSpawned < params.surgeCount && this.spawnTimer >= params.surgeInterval && this.tomatoes.length < cap) {
+        this.spawnWaveEnemy(params.types);
+        this.challengeSurgeSpawned++;
+        this.spawnTimer = 0;
+      }
+    } else {
+      if (this.spawnTimer >= params.retreatInterval && this.tomatoes.length < cap) {
+        this.spawnWaveEnemy(params.types);
+        this.spawnTimer = 0;
+      }
+    }
+    this.challengeMinSpawnTimer -= dt;
+    if (this.tomatoes.length < 3 && this.challengeMinSpawnTimer <= 0) {
+      this.spawnWaveEnemy(params.types);
+      this.challengeMinSpawnTimer = 60;
+    }
+  }
+
+  spawnWaveEnemy(types) {
+    const type = types[Math.floor(Math.random() * types.length)];
+    const t = new Tomato(type);
+    t.speed *= this.getTomatoSpeedMult();
+    t.life = Math.floor(t.life * (SIZE / 400));
+    this.tomatoes.push(t);
   }
 
   updateEndless(dt) {
@@ -4631,7 +4706,13 @@ class Game {
         { bg: 'rgba(0,0,0,0)', fg: '#4a7c59', size: SIZE * .032, align: 'center' });
     }
     // Wave intensity preview
-    if (this.gameMode !== 'endless' && this.waveState === 'preparing') {
+    if (this.gameMode === 'challenge') {
+      const isSurge = this.challengeWavePhase === 'surge';
+      const intensityLabel = isSurge ? '🔥 猛攻' : '🌱 休整';
+      const intensityColor = isSurge ? '#ef5350' : '#66bb6a';
+      this.drawPillText(intensityLabel, SIZE * .06, SIZE * .135,
+        { bg: 'rgba(0,0,0,0)', fg: intensityColor, size: SIZE * .024, align: 'left' });
+    } else if (this.gameMode !== 'endless' && this.waveState === 'preparing') {
       const intensityLabel = this.waveIntensity > 1.2 ? '🔥 猛烈' : this.waveIntensity < 0.8 ? '🌱 平缓' : '⚔️ 普通';
       const intensityColor = this.waveIntensity > 1.2 ? '#ef5350' : this.waveIntensity < 0.8 ? '#66bb6a' : '#8aa899';
       this.drawPillText(`⚠️ 下一波: ${intensityLabel}`, SIZE * .06, SIZE * .135,
