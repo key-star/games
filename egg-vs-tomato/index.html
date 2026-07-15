@@ -5344,10 +5344,11 @@ class Game {
       { bg: '#81c784', hoverBg: '#a5d6a7', fontSize: cardH * .04 });
     this.drawButton('📸 生成战绩', CX + btnGap / 2, btnY, btnW, cardH * .078,
       { bg: '#ffd54f', hoverBg: '#ffe082', fontSize: cardH * .032 });
-    // Gallery button
+    // Gallery button & debug data (proportional spacing)
+    const afterCard = CH - (cardY + cardH);
     const galBtnH2 = cardH * .04;
     const galBtnW2 = cardW * .32;
-    const galOutY = cardY + cardH + SIZE * .08;
+    const galOutY = cardY + cardH + afterCard * .28;
     ctx.fillStyle = '#4fc3f7';
     ctx.beginPath();
     ctx.roundRect(CX - galBtnW2 / 2, galOutY - galBtnH2 * .65, galBtnW2, galBtnH2, 8);
@@ -5358,7 +5359,7 @@ class Game {
     ctx.textAlign = 'center';
     ctx.fillText(`📹 精彩回放 (${HLRecorder.clips.length})`, CX, galOutY - galBtnH2 * .15);
     // Download debug data
-    const dbgOutY = galOutY + SIZE * .12;
+    const dbgOutY = cardY + cardH + afterCard * .68;
     ctx.fillStyle = '#90a4ae';
     ctx.font = `${cardH * .024}px Arial`;
     ctx.textAlign = 'center';
@@ -6385,19 +6386,17 @@ class Game {
       if (x > rightL && x < rightR && y > btnY && y < btnY + btnH) {
         this.sharePoster();
       }
+      const afterCard = CH - (cardY + cardH);
       const galBtnH2 = cardH * .04;
       const galBtnW2 = cardW * .32;
-      const galOutY = cardY + cardH + SIZE * .08;
+      const galOutY = cardY + cardH + afterCard * .28;
       if (x > CX - galBtnW2 / 2 && x < CX + galBtnW2 / 2 && y > galOutY - galBtnH2 * .65 && y < galOutY - galBtnH2 * .65 + galBtnH2) {
         this._galleryTouchStartY = undefined; this.showHighlightGallery = true;
       }
-      const dbgOutY = galOutY + SIZE * .12;
+      const dbgOutY = cardY + cardH + afterCard * .68;
       const dbgH2 = cardH * .028;
       if (x > CX - SIZE * .14 && x < CX + SIZE * .14 && y > dbgOutY - dbgH2 && y < dbgOutY + dbgH2 / 2) {
         this.downloadDebugData();
-      }
-      if (x > CX - galBtnW2 / 2 && x < CX + galBtnW2 / 2 && y > galOutY - galBtnH2 * .65 && y < galOutY - galBtnH2 * .65 + galBtnH2) {
-        this._galleryTouchStartY = undefined; this.showHighlightGallery = true;
       }
     }
   }
@@ -7151,11 +7150,12 @@ canvas.addEventListener('mousemove', e => {
     const rightL = CX + btnGap / 2, rightR = CX + btnW + btnGap / 2;
     if (mx > leftL && mx < leftR && my > btnY && my < btnY + btnH) found = '再来一局';
     if (mx > rightL && mx < rightR && my > btnY && my < btnY + btnH) found = '📸 生成战绩';
+    const afterCard = CH - (cardY + cardH);
     const galBtnH2 = cardH * .04;
     const galBtnW2 = cardW * .32;
-    const galOutY = cardY + cardH + SIZE * .08;
+    const galOutY = cardY + cardH + afterCard * .28;
     if (mx > CX - galBtnW2 / 2 && mx < CX + galBtnW2 / 2 && my > galOutY - galBtnH2 * .65 && my < galOutY - galBtnH2 * .65 + galBtnH2) found = '📹 精彩回放';
-    const dbgOutY = galOutY + SIZE * .12;
+    const dbgOutY = cardY + cardH + afterCard * .68;
     if (mx > CX - SIZE * .14 && mx < CX + SIZE * .14 && my > dbgOutY - cardH * .014 && my < dbgOutY + cardH * .014) found = '📥 导出调试数据';
   } else if (game.state === 'shop' || game.state === 'preshop') {
     const sw2 = SIZE * .88, sh2 = SIZE * .7;
