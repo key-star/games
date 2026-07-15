@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>蛋蛋快跑 - 在线统计</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background:#0f172a; color:#e2e8f0; padding:24px; }
+h1 { font-size:20px; color:#94a3b8; margin-bottom:32px; font-weight:500; }
+.card { background:#1e293b; border-radius:12px; padding:24px; margin-bottom:16px; }
+.row { display:flex; gap:16px; flex-wrap:wrap; }
+.stat-box { flex:1; min-width:160px; text-align:center; }
+.stat-label { font-size:13px; color:#64748b; margin-bottom:8px; }
+.stat-value { font-size:36px; font-weight:600; color:#38bdf8; }
+.stat-unit { font-size:14px; color:#64748b; }
+.stat-sub { font-size:13px; color:#64748b; margin-top:4px; }
+.chart-wrap { position:relative; height:300px; }
+#chart { max-height:300px; }
+.refresh-btn { background:#334155; border:none; color:#94a3b8; padding:8px 16px; border-radius:6px; cursor:pointer; font-size:13px; float:right; }
+.refresh-btn:hover { background:#475569; color:#e2e8f0; }
+.loading { text-align:center; color:#64748b; padding:40px; font-size:14px; }
+.error { text-align:center; color:#f87171; padding:40px; }
+</style>
+</head>
+<body>
+<h1>蛋蛋快跑 · 在线统计</h1>
+
+<div class="card row">
+  <div class="stat-box">
+    <div class="stat-label">当前在线</div>
+    <div class="stat-value" id="current">--</div>
+    <div class="stat-unit">人</div>
+  </div>
+  <div class="stat-box">
+    <div class="stat-label">今日峰值</div>
+    <div class="stat-value" id="peak">--</div>
+    <div class="stat-unit">人</div>
+    <div class="stat-sub" id="peakTime"></div>
+  </div>
+  <div class="stat-box">
+    <div class="stat-label">24h 平均</div>
+    <div class="stat-value" id="avg">--</div>
+    <div class="stat-unit">人</div>
+  </div>
+  <div class="stat-box">
+    <div class="stat-label">总访问</div>
+    <div class="stat-value" id="total">--</div>
+    <div class="stat-unit">次心跳</div>
+  </div>
+</div>
+
+<div class="card">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+    <div style="font-size:14px;color:#94a3b8;">过去 24 小时在线趋势</div>
+    <button class="refresh-btn" onclick="refresh()">刷新</button>
+  </div>
+  <div class="chart-wrap">
+    <canvas id="chart"></canvas>
+  </div>
+</div>
+
+<script>
+let chart = null;
+
+function formatTime(iso) {
+  const d = new Date(iso + 'Z');
+  return d.getHours().toString().padStart(2,'0') + ':' + d.getMinutes().toString().padStart(2,'0');
+}
+
+async function refresh() {
+  document.getElementById('current').textContent = '...';
+  try {
+    const [currentRes, statsRes] = await Promise.all([
+      fetch('/api/online/current'),
+      fetch('/api/online/stats')
+    ]);
+
+    if (!currentRes.ok || !statsRes.ok) {
+      throw new Error('API 请求失败: ' + currentRes.status + ' / ' + statsRes.status);
+    }
+
+    const current = await currentRes.json();
+    const stats = await statsRes.json();
+
+    document.getElementById('current').textContent = current.online;
+
+    if (stats.length === 0) {
+      document.getElementById('peak').textContent = '--';
+      document.getElementById('avg').textContent = '--';
+      document.getElementById('total').textContent = '0';
+      return;
+    }
+
+    const values = stats.map(s => s.count);
+    const times = stats.map(s => formatTime(s.recorded_at));
+
+    const peak = Math.max(...values);
+    const peakIdx = values.indexOf(peak);
+    const avg = Math.round(values.reduce((a,b) => a + b, 0) / values.length);
+    const total = values.reduce((a,b) => a + b, 0);
+
+    document.getElementById('peak').textContent = peak;
+    document.getElementById('peakTime').textContent = '峰值时间: ' + (stats[peakIdx] ? formatTime(stats[peakIdx].recorded_at) : '');
+    document.getElementById('avg').textContent = avg;
+    document.getElementById('total').textContent = total;
+
+    if (chart) {
+      chart.data.labels = times;
+      chart.data.datasets[0].data = values;
+      chart.update();
+    } else {
+      const ctx = document.getElementById('chart').getContext('2d');
+      chart = new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels: times,
+          datasets: [{
+            label: '在线人数',
+            data: values,
+            borderColor: '#38bdf8',
+            backgroundColor: 'rgba(56,189,248,0.1)',
+            fill: true,
+            tension: 0.3,
+            pointRadius: 2,
+            pointHoverRadius: 5,
+            borderWidth: 2
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: { display: false }
+          },
+          scales: {
+            x: {
+              ticks: { color: '#64748b', font: { size: 11 }, maxTicksLimit: 12 },
+              grid: { color: 'rgba(100,116,139,0.1)' }
+            },
+            y: {
+              beginAtZero: true,
+              ticks: { color: '#64748b', font: { size: 11 }, stepSize: 1 },
+              grid: { color: 'rgba(100,116,139,0.1)' }
+            }
+          },
+          interaction: {
+            intersect: false,
+            mode: 'index'
+          }
+        }
+      });
+    }
+  } catch (e) {
+    document.getElementById('current').textContent = 'ERR';
+    document.querySelector('.error') || document.body.insertAdjacentHTML('beforeend',
+      '<div class="card error">加载失败: ' + e.message + '</div>');
+  }
+}
+
+refresh();
+setInterval(refresh, 30000);
+</script>
+</body>
+</html>
