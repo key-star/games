@@ -54,7 +54,6 @@ tr:hover td { background:#334155; }
     <div class="stat-box"><div class="stat-label">累计玩家</div><div class="stat-value" id="v-totalPlayers">--</div><div class="stat-unit">人</div></div>
     <div class="stat-box"><div class="stat-label">总对局数</div><div class="stat-value" id="v-totalGames">--</div><div class="stat-unit">局</div></div>
     <div class="stat-box"><div class="stat-label">平均时长</div><div class="stat-value" id="v-avgSurvival">--</div><div class="stat-unit">秒</div></div>
-    <div class="stat-box"><div class="stat-label">总击杀</div><div class="stat-value" id="v-totalKills">--</div><div class="stat-unit">个</div></div>
   </div>
 
   <div class="card">
@@ -137,7 +136,6 @@ async function refresh() {
     document.getElementById('v-totalPlayers').textContent = overview.totalPlayers;
     document.getElementById('v-totalGames').textContent = overview.totalGames;
     document.getElementById('v-avgSurvival').textContent = overview.avgSurvival;
-    document.getElementById('v-totalKills').textContent = overview.totalKills;
 
     if (stats.length > 0) {
       const values = stats.map(s => s.count);

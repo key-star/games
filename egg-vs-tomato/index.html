@@ -1397,10 +1397,22 @@ const HLRecorder = {
   async _canUseWebCodecs() {
     try {
       if (typeof VideoEncoder === 'undefined') { this._log('WC: VideoEncoder 不存在'); return false; }
+      const platform = this._getPlatform();
+      if (platform === 'ios') { this._log('WC: iOS 平台 WebCodecs 已知不可靠, 降级 MediaRecorder'); return false; }
       const result = await VideoEncoder.isConfigSupported({ codec: 'avc1.4D401E', width: 16, height: 16 });
       this._log('WC: avc1.4D401E 检测结果 supported=' + result.supported);
-      return result.supported;
-    } catch(e) { this._log('WC: isConfigSupported 异常 ' + e.message); return false; }
+      if (!result.supported) return false;
+      try {
+        const testFrame = new VideoFrame(canvas, { timestamp: 0 });
+        testFrame.close();
+        this._log('WC: VideoFrame 实测创建成功');
+      } catch(e) {
+        this._log('WC: VideoFrame 实测创建失败 (' + e.constructor.name + ': ' + e.message + '), 降级 MediaRecorder');
+        return false;
+      }
+      this._log('WC: 跳过编码器实测, 信任 isConfigSupported + VideoFrame');
+      return true;
+    } catch(e) { this._log('WC: 检测异常 ' + e.message); return false; }
   },
 
   _getPlatform() {
@@ -1454,6 +1466,7 @@ const HLRecorder = {
 
       this._wcEncoder = new VideoEncoder({
         output: (chunk, meta) => {
+          if (this._wcBuffer.length === 0) this._log('WC: 编码器首次产出帧 type=' + chunk.type + ' size=' + chunk.byteLength);
           if (chunk.type === 'key') {
             if (meta && meta.decoderConfig) {
               const desc = meta.decoderConfig.description;
@@ -1488,7 +1501,17 @@ const HLRecorder = {
         avc: { format: 'annexb' },
       });
 
+      if (this._wcEncoder.state !== 'configured') {
+        this._log('WC: 启动失败 state=' + this._wcEncoder.state + ', 降级 MediaRecorder');
+        this._wcEncoder.close();
+        this._wcEncoder = null;
+        this._useWC = false;
+        this._startMR();
+        return;
+      }
+
       this._recording = true;
+      this._log('WC: 录制已启动 fps=' + this._wcFps + ' canvas=' + w + 'x' + h);
       this._wcCaptureTimer = setInterval(() => this._captureFrameWC(), 1000 / this._wcFps);
     } catch(e) { console.warn('HL: WC start fail', e); this._useWC = false; }
   },
@@ -1506,12 +1529,14 @@ const HLRecorder = {
   },
 
   _captureFrameWC() {
-    if (!this._recording || !this._wcEncoder || this._wcEncoder.state === 'closed') return;
+    if (!this._recording || !this._wcEncoder || this._wcEncoder.state !== 'configured') return;
     try {
       const frame = new VideoFrame(canvas, { timestamp: this._wcPts });
       this._wcEncoder.encode(frame, { keyFrame: this._wcBuffer.length === 0 });
       frame.close();
-    } catch(e) { /* frame may be closed during resize */ }
+    } catch(e) {
+      this._log('WC: 捕获帧异常 ' + e.constructor.name + ': ' + e.message);
+    }
   },
 
   _findFramePts(frames, targetPts) {
@@ -1525,15 +1550,16 @@ const HLRecorder = {
   },
 
   _saveHighlightWC(type, label, icon, duration) {
-    if (!this._recording) return;
+    if (!this._recording) { this._log('WC: saveHighlight 跳过 — 未在录制'); return; }
     const now = Date.now();
     for (const c of this.clips) {
-      if (c.type === type && now - c.timestamp < 10000) return;
+      if (c.type === type && now - c.timestamp < 10000) { this._log('WC: saveHighlight 跳过 — ' + type + ' 10秒防重复'); return; }
     }
     const curPts = this._wcPts;
     const targetPts = curPts - 3_000_000;
     const startIdx = this._findFramePts(this._wcBuffer, targetPts);
     const prelude = this._wcBuffer.slice(startIdx);
+    this._log('WC: saveHighlight ' + type + ' buffer=' + this._wcBuffer.length + ' prelude=' + prelude.length + ' pts=' + curPts);
     if (prelude.length === 0) return;
     const captureFrames = [...prelude];
     const targetFrames = Math.ceil(duration * this._wcFps);
