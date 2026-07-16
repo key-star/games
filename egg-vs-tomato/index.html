@@ -2377,12 +2377,12 @@ class Game {
   logError(msg, data) {
     this.debugInfo.errors.push({ t: this.survivalTime, msg, data: data || '', ts: Date.now() });
     if (this.debugInfo.errors.length > 50) this.debugInfo.errors.shift();
-    // Also POST to server if available
     try {
-      fetch('/api/log-error', {
+      const pid = localStorage.getItem('hb_pid') || '';
+      fetch('/api/error/log', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ t: this.survivalTime, msg, data: data || '', ts: Date.now() })
+        body: JSON.stringify({ player_id: pid, survival_time: this.survivalTime, message: msg, stack: data || '' })
       }).catch(() => {});
     } catch(e) {}
   }
@@ -4052,6 +4052,7 @@ class Game {
   }
 
   _exitToVictoryScreen() {
+    this._reportGameEnd('victory');
     this.pushDebugData();
     HLRecorder.stop();
     this.totalGamesPlayed++;
@@ -5693,7 +5694,28 @@ class Game {
     }
   }
 
+  _reportGameEnd(result) {
+    try {
+      const pid = localStorage.getItem('hb_pid') || '';
+      fetch('/api/game/end', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          player_id: pid,
+          survival_seconds: Math.round(this.survivalTime),
+          result: result,
+          kills: this.sessionKills || 0,
+          max_combo: this.maxCombo || 0,
+          gold_earned: this.gold || 0,
+          difficulty: Math.round(this.difficulty * 10) / 10 || 0,
+          game_mode: this.gameMode || 'normal'
+        })
+      }).catch(() => {});
+    } catch(e) {}
+  }
+
   gameOver() {
+    this._reportGameEnd('gameover');
     this.pushDebugData();
     HLRecorder.stop();
     this.survivalHistory.push(Math.floor(this.survivalTime));

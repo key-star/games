@@ -7,10 +7,5 @@ export async function onRequest(context) {
      WHERE seen_at >= datetime('now', '-60 seconds')`
   ).all();
   const count = results[0]?.count || 0;
-
-  await db.prepare(
-    'INSERT INTO online_snapshot (count, recorded_at) VALUES (?1, datetime(\'now\'))'
-  ).bind(count).run();
-
   return Response.json({ online: count });
 }

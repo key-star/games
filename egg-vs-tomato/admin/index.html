@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>蛋蛋快跑 - 在线统计</title>
+<title>蛋蛋快跑 - 后台统计</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
 <style>
 * { margin:0; padding:0; box-sizing:border-box; }
@@ -11,153 +11,297 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 h1 { font-size:20px; color:#94a3b8; margin-bottom:32px; font-weight:500; }
 .card { background:#1e293b; border-radius:12px; padding:24px; margin-bottom:16px; }
 .row { display:flex; gap:16px; flex-wrap:wrap; }
-.stat-box { flex:1; min-width:160px; text-align:center; }
+.stat-box { flex:1; min-width:140px; text-align:center; padding:8px 0; }
 .stat-label { font-size:13px; color:#64748b; margin-bottom:8px; }
-.stat-value { font-size:36px; font-weight:600; color:#38bdf8; }
+.stat-value { font-size:32px; font-weight:600; color:#38bdf8; }
 .stat-unit { font-size:14px; color:#64748b; }
-.stat-sub { font-size:13px; color:#64748b; margin-top:4px; }
 .chart-wrap { position:relative; height:300px; }
-#chart { max-height:300px; }
 .refresh-btn { background:#334155; border:none; color:#94a3b8; padding:8px 16px; border-radius:6px; cursor:pointer; font-size:13px; float:right; }
 .refresh-btn:hover { background:#475569; color:#e2e8f0; }
 .loading { text-align:center; color:#64748b; padding:40px; font-size:14px; }
-.error { text-align:center; color:#f87171; padding:40px; }
+.error-msg { text-align:center; color:#f87171; padding:40px; }
+.section-title { font-size:14px; color:#94a3b8; margin-bottom:16px; font-weight:500; }
+table { width:100%; border-collapse:collapse; font-size:13px; }
+th { text-align:left; padding:8px 12px; color:#64748b; border-bottom:1px solid #334155; font-weight:500; }
+td { padding:8px 12px; border-bottom:1px solid #1e293b; }
+tr:hover td { background:#334155; }
+.badge { display:inline-block; padding:2px 8px; border-radius:4px; font-size:11px; }
+.badge-ok { background:#166534; color:#86efac; }
+.badge-warn { background:#854d0e; color:#fde047; }
+.badge-err { background:#7f1d1d; color:#fca5a5; }
+.tabs { display:flex; gap:4px; margin-bottom:16px; }
+.tab { padding:8px 16px; border-radius:6px; cursor:pointer; font-size:13px; color:#64748b; background:#1e293b; border:none; }
+.tab:hover { background:#334155; color:#e2e8f0; }
+.tab.active { background:#38bdf8; color:#0f172a; font-weight:600; }
+.hidden { display:none; }
+.grid-2 { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+@media (max-width:768px) { .grid-2 { grid-template-columns:1fr; } }
 </style>
 </head>
 <body>
-<h1>蛋蛋快跑 · 在线统计</h1>
+<h1>蛋蛋快跑 · 后台统计</h1>
 
-<div class="card row">
-  <div class="stat-box">
-    <div class="stat-label">当前在线</div>
-    <div class="stat-value" id="current">--</div>
-    <div class="stat-unit">人</div>
+<div class="tabs">
+  <button class="tab active" data-tab="overview">概览</button>
+  <button class="tab" data-tab="games">对局</button>
+  <button class="tab" data-tab="errors">错误</button>
+</div>
+
+<div id="tab-overview">
+  <div class="card row" id="overview-cards">
+    <div class="stat-box"><div class="stat-label">当前在线</div><div class="stat-value" id="v-online">--</div><div class="stat-unit">人</div></div>
+    <div class="stat-box"><div class="stat-label">24h 活跃 (DAU)</div><div class="stat-value" id="v-dau">--</div><div class="stat-unit">人</div></div>
+    <div class="stat-box"><div class="stat-label">累计玩家</div><div class="stat-value" id="v-totalPlayers">--</div><div class="stat-unit">人</div></div>
+    <div class="stat-box"><div class="stat-label">总对局数</div><div class="stat-value" id="v-totalGames">--</div><div class="stat-unit">局</div></div>
+    <div class="stat-box"><div class="stat-label">平均时长</div><div class="stat-value" id="v-avgSurvival">--</div><div class="stat-unit">秒</div></div>
+    <div class="stat-box"><div class="stat-label">总击杀</div><div class="stat-value" id="v-totalKills">--</div><div class="stat-unit">个</div></div>
   </div>
-  <div class="stat-box">
-    <div class="stat-label">今日峰值</div>
-    <div class="stat-value" id="peak">--</div>
-    <div class="stat-unit">人</div>
-    <div class="stat-sub" id="peakTime"></div>
+
+  <div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+      <div class="section-title">过去 24 小时在线趋势</div>
+      <button class="refresh-btn" onclick="refresh()">刷新</button>
+    </div>
+    <div class="chart-wrap"><canvas id="trend-chart"></canvas></div>
   </div>
-  <div class="stat-box">
-    <div class="stat-label">24h 平均</div>
-    <div class="stat-value" id="avg">--</div>
-    <div class="stat-unit">人</div>
-  </div>
-  <div class="stat-box">
-    <div class="stat-label">总访问</div>
-    <div class="stat-value" id="total">--</div>
-    <div class="stat-unit">次心跳</div>
+
+  <div class="grid-2">
+    <div class="card">
+      <div class="section-title">地区分布（近 7 天）</div>
+      <div class="chart-wrap" style="height:250px;"><canvas id="region-chart"></canvas></div>
+    </div>
+    <div class="card">
+      <div class="section-title">最近对局</div>
+      <div id="recent-games"><div class="loading">加载中...</div></div>
+    </div>
   </div>
 </div>
 
-<div class="card">
-  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
-    <div style="font-size:14px;color:#94a3b8;">过去 24 小时在线趋势</div>
-    <button class="refresh-btn" onclick="refresh()">刷新</button>
+<div id="tab-games" class="hidden">
+  <div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+      <div class="section-title">对局记录</div>
+      <button class="refresh-btn" onclick="refreshGames()">刷新</button>
+    </div>
+    <div id="games-table"><div class="loading">加载中...</div></div>
   </div>
-  <div class="chart-wrap">
-    <canvas id="chart"></canvas>
+</div>
+
+<div id="tab-errors" class="hidden">
+  <div class="card row" id="error-cards">
+    <div class="stat-box"><div class="stat-label">7 天错误数</div><div class="stat-value" id="e-total">--</div></div>
+    <div class="stat-box"><div class="stat-label">崩溃率</div><div class="stat-value" id="e-rate">--</div><div class="stat-unit">%</div></div>
+    <div class="stat-box"><div class="stat-label">7 天总对局</div><div class="stat-value" id="e-games">--</div><div class="stat-unit">局</div></div>
+  </div>
+  <div class="grid-2">
+    <div class="card">
+      <div class="section-title">TOP 错误</div>
+      <div id="top-errors"><div class="loading">加载中...</div></div>
+    </div>
+    <div class="card">
+      <div class="section-title">7 天错误趋势</div>
+      <div class="chart-wrap" style="height:200px;"><canvas id="error-chart"></canvas></div>
+    </div>
   </div>
 </div>
 
 <script>
-let chart = null;
+let chart = null, regionChart = null, errorChart = null;
 
 function formatTime(iso) {
+  if (!iso) return '--';
   const d = new Date(iso + 'Z');
   return d.getHours().toString().padStart(2,'0') + ':' + d.getMinutes().toString().padStart(2,'0');
 }
 
+function formatDate(iso) {
+  if (!iso) return '--';
+  const d = new Date(iso + 'Z');
+  return d.getMonth()+1 + '/' + d.getDate() + ' ' + d.getHours().toString().padStart(2,'0') + ':' + d.getMinutes().toString().padStart(2,'0');
+}
+
 async function refresh() {
-  document.getElementById('current').textContent = '...';
   try {
-    const [currentRes, statsRes] = await Promise.all([
-      fetch('/api/online/current'),
-      fetch('/api/online/stats')
+    const [overviewRes, statsRes, recentRes] = await Promise.all([
+      fetch('/api/overview'),
+      fetch('/api/online/stats'),
+      fetch('/api/game/recent')
     ]);
-
-    if (!currentRes.ok || !statsRes.ok) {
-      throw new Error('API 请求失败: ' + currentRes.status + ' / ' + statsRes.status);
-    }
-
-    const current = await currentRes.json();
+    const overview = await overviewRes.json();
     const stats = await statsRes.json();
+    let recent = [];
+    try { recent = await recentRes.json(); } catch(e) {}
 
-    document.getElementById('current').textContent = current.online;
+    document.getElementById('v-online').textContent = overview.online;
+    document.getElementById('v-dau').textContent = overview.dau;
+    document.getElementById('v-totalPlayers').textContent = overview.totalPlayers;
+    document.getElementById('v-totalGames').textContent = overview.totalGames;
+    document.getElementById('v-avgSurvival').textContent = overview.avgSurvival;
+    document.getElementById('v-totalKills').textContent = overview.totalKills;
 
-    if (stats.length === 0) {
-      document.getElementById('peak').textContent = '--';
-      document.getElementById('avg').textContent = '--';
-      document.getElementById('total').textContent = '0';
-      return;
-    }
-
-    const values = stats.map(s => s.count);
-    const times = stats.map(s => formatTime(s.recorded_at));
-
-    const peak = Math.max(...values);
-    const peakIdx = values.indexOf(peak);
-    const avg = Math.round(values.reduce((a,b) => a + b, 0) / values.length);
-    const total = values.reduce((a,b) => a + b, 0);
-
-    document.getElementById('peak').textContent = peak;
-    document.getElementById('peakTime').textContent = '峰值时间: ' + (stats[peakIdx] ? formatTime(stats[peakIdx].recorded_at) : '');
-    document.getElementById('avg').textContent = avg;
-    document.getElementById('total').textContent = total;
-
-    if (chart) {
-      chart.data.labels = times;
-      chart.data.datasets[0].data = values;
-      chart.update();
-    } else {
-      const ctx = document.getElementById('chart').getContext('2d');
-      chart = new Chart(ctx, {
-        type: 'line',
-        data: {
-          labels: times,
-          datasets: [{
-            label: '在线人数',
-            data: values,
-            borderColor: '#38bdf8',
-            backgroundColor: 'rgba(56,189,248,0.1)',
-            fill: true,
-            tension: 0.3,
-            pointRadius: 2,
-            pointHoverRadius: 5,
-            borderWidth: 2
-          }]
-        },
-        options: {
-          responsive: true,
-          maintainAspectRatio: false,
-          plugins: {
-            legend: { display: false }
+    if (stats.length > 0) {
+      const values = stats.map(s => s.count);
+      const times = stats.map(s => formatTime(s.recorded_at));
+      if (chart) {
+        chart.data.labels = times;
+        chart.data.datasets[0].data = values;
+        chart.update();
+      } else {
+        const ctx = document.getElementById('trend-chart').getContext('2d');
+        chart = new Chart(ctx, {
+          type: 'line',
+          data: {
+            labels: times,
+            datasets: [{
+              label: '在线人数',
+              data: values,
+              borderColor: '#38bdf8',
+              backgroundColor: 'rgba(56,189,248,0.1)',
+              fill: true, tension: 0.3, pointRadius: 2, pointHoverRadius: 5, borderWidth: 2
+            }]
           },
-          scales: {
-            x: {
-              ticks: { color: '#64748b', font: { size: 11 }, maxTicksLimit: 12 },
-              grid: { color: 'rgba(100,116,139,0.1)' }
+          options: {
+            responsive: true, maintainAspectRatio: false,
+            plugins: { legend: { display: false } },
+            scales: {
+              x: { ticks: { color: '#64748b', font: { size: 11 }, maxTicksLimit: 12 }, grid: { color: 'rgba(100,116,139,0.1)' } },
+              y: { beginAtZero: true, ticks: { color: '#64748b', font: { size: 11 }, stepSize: 1 }, grid: { color: 'rgba(100,116,139,0.1)' } }
             },
-            y: {
-              beginAtZero: true,
-              ticks: { color: '#64748b', font: { size: 11 }, stepSize: 1 },
-              grid: { color: 'rgba(100,116,139,0.1)' }
-            }
-          },
-          interaction: {
-            intersect: false,
-            mode: 'index'
+            interaction: { intersect: false, mode: 'index' }
           }
-        }
-      });
+        });
+      }
     }
-  } catch (e) {
-    document.getElementById('current').textContent = 'ERR';
-    document.querySelector('.error') || document.body.insertAdjacentHTML('beforeend',
-      '<div class="card error">加载失败: ' + e.message + '</div>');
+
+    if (overview.regions && overview.regions.length > 0) {
+      const labels = overview.regions.map(r => r.country || '未知');
+      const data = overview.regions.map(r => r.count);
+      const colors = ['#38bdf8','#f472b6','#34d399','#fbbf24','#f87171','#a78bfa','#fb923c','#67e8f9','#c084fc','#2dd4bf','#fde047','#fca5a5','#818cf8','#6ee7b7','#fdba74','#5eead4','#e879f9','#94a3b8'];
+      if (regionChart) {
+        regionChart.data.labels = labels;
+        regionChart.data.datasets[0].data = data;
+        regionChart.update();
+      } else {
+        const ctx = document.getElementById('region-chart').getContext('2d');
+        regionChart = new Chart(ctx, {
+          type: 'doughnut',
+          data: {
+            labels,
+            datasets: [{ data, backgroundColor: colors.slice(0, labels.length), borderWidth: 0 }]
+          },
+          options: {
+            responsive: true, maintainAspectRatio: false,
+            plugins: { legend: { position: 'right', labels: { color: '#94a3b8', font: { size: 11 } } } }
+          }
+        });
+      }
+    }
+
+    if (recent.length > 0) {
+      document.getElementById('recent-games').innerHTML = '<table><tr><th>玩家</th><th>结果</th><th>时长</th><th>击杀</th><th>连击</th><th>模式</th><th>时间</th></tr>' +
+        recent.map(g => `<tr>
+          <td style="font-family:monospace;font-size:11px;color:#94a3b8;">${(g.player_id || '').slice(0,8)}</td>
+          <td><span class="badge ${g.result === 'victory' ? 'badge-ok' : 'badge-err'}">${g.result === 'victory' ? '胜利' : '失败'}</span></td>
+          <td>${Math.round(g.survival_seconds || 0)}s</td>
+          <td>${g.kills || 0}</td>
+          <td>${g.max_combo || 0}</td>
+          <td>${g.game_mode || 'normal'}</td>
+          <td style="color:#64748b;font-size:11px;">${formatDate(g.ended_at)}</td>
+        </tr>`).join('') + '</table>';
+    } else {
+      document.getElementById('recent-games').innerHTML = '<div style="text-align:center;color:#64748b;padding:20px;">暂无对局数据</div>';
+    }
+  } catch(e) {
+    document.querySelector('#overview-cards').innerHTML = '<div class="error-msg">加载失败: ' + e.message + '</div>';
   }
 }
+
+async function refreshGames() {
+  try {
+    const res = await fetch('/api/game/recent?limit=100');
+    const data = await res.json();
+    if (data.length > 0) {
+      document.getElementById('games-table').innerHTML = '<table><tr><th>玩家</th><th>结果</th><th>时长(s)</th><th>击杀</th><th>连击</th><th>金币</th><th>难度</th><th>模式</th><th>时间</th></tr>' +
+        data.map(g => `<tr>
+          <td style="font-family:monospace;font-size:11px;color:#94a3b8;">${(g.player_id || '').slice(0,12)}</td>
+          <td><span class="badge ${g.result === 'victory' ? 'badge-ok' : 'badge-err'}">${g.result === 'victory' ? '胜利' : '失败'}</span></td>
+          <td>${Math.round(g.survival_seconds || 0)}</td>
+          <td>${g.kills || 0}</td>
+          <td>${g.max_combo || 0}</td>
+          <td>${g.gold_earned || 0}</td>
+          <td>${g.difficulty || 0}</td>
+          <td>${g.game_mode || 'normal'}</td>
+          <td style="color:#64748b;font-size:11px;">${formatDate(g.ended_at)}</td>
+        </tr>`).join('') + '</table>';
+    } else {
+      document.getElementById('games-table').innerHTML = '<div style="text-align:center;color:#64748b;padding:20px;">暂无对局数据</div>';
+    }
+  } catch(e) {
+    document.getElementById('games-table').innerHTML = '<div class="error-msg">加载失败: ' + e.message + '</div>';
+  }
+}
+
+async function refreshErrors() {
+  try {
+    const res = await fetch('/api/error/stats');
+    const data = await res.json();
+    document.getElementById('e-total').textContent = data.total;
+    document.getElementById('e-rate').textContent = data.crashRate;
+    document.getElementById('e-games').textContent = data.totalGames;
+
+    if (data.topErrors && data.topErrors.length > 0) {
+      document.getElementById('top-errors').innerHTML = '<table><tr><th>错误消息</th><th>次数</th></tr>' +
+        data.topErrors.map(e => `<tr><td style="color:#fca5a5;font-family:monospace;font-size:11px;max-width:400px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${e.message}</td><td><span class="badge badge-err">${e.count}</span></td></tr>`).join('') + '</table>';
+    } else {
+      document.getElementById('top-errors').innerHTML = '<div style="text-align:center;color:#64748b;padding:20px;">暂无错误记录</div>';
+    }
+
+    if (data.daily && data.daily.length > 0) {
+      const labels = data.daily.map(d => d.date);
+      const values = data.daily.map(d => d.count);
+      if (errorChart) {
+        errorChart.data.labels = labels;
+        errorChart.data.datasets[0].data = values;
+        errorChart.update();
+      } else {
+        const ctx = document.getElementById('error-chart').getContext('2d');
+        errorChart = new Chart(ctx, {
+          type: 'bar',
+          data: {
+            labels,
+            datasets: [{
+              label: '错误数',
+              data: values,
+              backgroundColor: '#f87171',
+              borderRadius: 4
+            }]
+          },
+          options: {
+            responsive: true, maintainAspectRatio: false,
+            plugins: { legend: { display: false } },
+            scales: {
+              x: { ticks: { color: '#64748b', font: { size: 11 } }, grid: { color: 'rgba(100,116,139,0.1)' } },
+              y: { beginAtZero: true, ticks: { color: '#64748b', font: { size: 11 }, stepSize: 1 }, grid: { color: 'rgba(100,116,139,0.1)' } }
+            }
+          }
+        });
+      }
+    }
+  } catch(e) {
+    document.querySelector('#error-cards').innerHTML = '<div class="error-msg">加载失败: ' + e.message + '</div>';
+  }
+}
+
+document.querySelectorAll('.tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    tab.classList.add('active');
+    document.querySelectorAll('[id^="tab-"]').forEach(t => t.classList.add('hidden'));
+    document.getElementById('tab-' + tab.dataset.tab).classList.remove('hidden');
+    if (tab.dataset.tab === 'games') refreshGames();
+    if (tab.dataset.tab === 'errors') refreshErrors();
+  });
+});
 
 refresh();
 setInterval(refresh, 30000);
