@@ -219,9 +219,11 @@ async function refreshGames() {
     const res = await fetch('/api/game/recent?limit=100');
     const data = await res.json();
     if (data.length > 0) {
-      document.getElementById('games-table').innerHTML = '<table><tr><th>玩家</th><th>结果</th><th>时长(s)</th><th>击杀</th><th>连击</th><th>金币</th><th>难度</th><th>模式</th><th>时间</th></tr>' +
+      function fmtLoc(g) { return [g.city, g.region, g.country].filter(Boolean).join(', ') || '-'; }
+      document.getElementById('games-table').innerHTML = '<table><tr><th>玩家</th><th>地区</th><th>结果</th><th>时长(s)</th><th>击杀</th><th>连击</th><th>金币</th><th>难度</th><th>模式</th><th>时间</th></tr>' +
         data.map(g => `<tr>
           <td style="font-family:monospace;font-size:11px;color:#94a3b8;">${(g.player_id || '').slice(0,12)}</td>
+          <td style="color:#94a3b8;font-size:11px;">${fmtLoc(g)}</td>
           <td><span class="badge ${g.result === 'victory' ? 'badge-ok' : 'badge-err'}">${g.result === 'victory' ? '胜利' : '失败'}</span></td>
           <td>${Math.round(g.survival_seconds || 0)}</td>
           <td>${g.kills || 0}</td>

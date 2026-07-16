@@ -6263,10 +6263,8 @@ class Game {
     if (this.showTutorial) {
       const now2 = Date.now();
       if (this._lastTutClick && now2 - this._lastTutClick < 300) {
-        this.logError('tutorial_debounce_skip', `index=${this.tutorialIndex} elapsed=${now2 - this._lastTutClick}ms`);
         return;
       }
-      this.logError('tutorial_advance', `from=${this.tutorialIndex} state=${this.state}`);
       this._lastTutClick = now2;
       this.tutorialIndex++;
       if (this.tutorialIndex >= TUTORIAL_CARDS.length) {
