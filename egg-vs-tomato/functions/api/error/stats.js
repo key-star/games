@@ -22,11 +22,19 @@ export async function onRequest(context) {
   const { results: totalGames } = await db.prepare(
     `SELECT COUNT(*) AS total FROM game_session WHERE ended_at >= datetime('now', '-7 days')`
   ).all();
+  const { results: list } = await db.prepare(
+    `SELECT id, player_id, message, survival_time, created_at
+     FROM error_log
+     WHERE created_at >= datetime('now', '-7 days')
+     ORDER BY created_at DESC
+     LIMIT 200`
+  ).all();
   return Response.json({
     topErrors,
     total: total[0]?.total || 0,
     daily,
     totalGames: totalGames[0]?.total || 0,
-    crashRate: totalGames[0]?.total > 0 ? ((total[0]?.total || 0) / totalGames[0].total * 100).toFixed(1) : '0.0'
+    crashRate: totalGames[0]?.total > 0 ? ((total[0]?.total || 0) / totalGames[0].total * 100).toFixed(1) : '0.0',
+    list
   });
 }

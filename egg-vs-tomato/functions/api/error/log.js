@@ -1,9 +1,22 @@
 export async function onRequest(context) {
   const { request, env } = context;
+  const db = env.DB;
+
+  if (request.method === 'DELETE') {
+    const url = new URL(request.url);
+    const id = url.searchParams.get('id');
+    if (id) {
+      await db.prepare('DELETE FROM error_log WHERE id = ?1').bind(id).run();
+    } else {
+      await db.prepare('DELETE FROM error_log').run();
+    }
+    return new Response('ok', { status: 200 });
+  }
+
   if (request.method !== 'POST') {
     return new Response('Method not allowed', { status: 405 });
   }
-  const db = env.DB;
+
   const body = await request.json();
   const { player_id, survival_time, message, stack } = body;
   await db.prepare(

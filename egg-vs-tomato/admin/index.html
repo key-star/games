@@ -102,6 +102,13 @@ tr:hover td { background:#334155; }
       <div class="chart-wrap" style="height:200px;"><canvas id="error-chart"></canvas></div>
     </div>
   </div>
+  <div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+      <div class="section-title" style="margin-bottom:0;">错误记录</div>
+      <button class="refresh-btn" onclick="clearErrors()" style="background:#7f1d1d;color:#fca5a5;">清空全部</button>
+    </div>
+    <div id="error-list"><div class="loading">加载中...</div></div>
+  </div>
 </div>
 
 <script>
@@ -118,6 +125,12 @@ function formatDate(iso) {
   const d = new Date(iso + 'Z');
   return d.getMonth()+1 + '/' + d.getDate() + ' ' + d.getHours().toString().padStart(2,'0') + ':' + d.getMinutes().toString().padStart(2,'0');
 }
+
+function fmtMode(m) {
+  return m === 'challenge' ? '生存挑战' : '无尽生存';
+}
+
+
 
 async function refresh() {
   try {
@@ -172,7 +185,7 @@ async function refresh() {
     }
 
     if (overview.regions && overview.regions.length > 0) {
-      const labels = overview.regions.map(r => r.country || '未知');
+      const labels = overview.regions.map(r => [r.city, r.region, r.country].filter(Boolean).join(', ') || '未知');
       const data = overview.regions.map(r => r.count);
       const colors = ['#38bdf8','#f472b6','#34d399','#fbbf24','#f87171','#a78bfa','#fb923c','#67e8f9','#c084fc','#2dd4bf','#fde047','#fca5a5','#818cf8','#6ee7b7','#fdba74','#5eead4','#e879f9','#94a3b8'];
       if (regionChart) {
@@ -196,14 +209,15 @@ async function refresh() {
     }
 
     if (recent.length > 0) {
-      document.getElementById('recent-games').innerHTML = '<table><tr><th>玩家</th><th>结果</th><th>时长</th><th>击杀</th><th>连击</th><th>模式</th><th>时间</th></tr>' +
+      document.getElementById('recent-games').innerHTML = '<table><tr><th>玩家</th><th>平台</th><th>结果</th><th>时长</th><th>击杀</th><th>连击</th><th>模式</th><th>时间</th></tr>' +
         recent.map(g => `<tr>
           <td style="font-family:monospace;font-size:11px;color:#94a3b8;">${(g.player_id || '').slice(0,8)}</td>
+          <td style="color:#64748b;font-size:11px;">${g.platform || '-'}</td>
           <td><span class="badge ${g.result === 'victory' ? 'badge-ok' : 'badge-err'}">${g.result === 'victory' ? '胜利' : '失败'}</span></td>
           <td>${Math.round(g.survival_seconds || 0)}s</td>
           <td>${g.kills || 0}</td>
           <td>${g.max_combo || 0}</td>
-          <td>${g.game_mode || 'normal'}</td>
+          <td>${fmtMode(g.game_mode)}</td>
           <td style="color:#64748b;font-size:11px;">${formatDate(g.ended_at)}</td>
         </tr>`).join('') + '</table>';
     } else {
@@ -220,17 +234,21 @@ async function refreshGames() {
     const data = await res.json();
     if (data.length > 0) {
       function fmtLoc(g) { return [g.city, g.region, g.country].filter(Boolean).join(', ') || '-'; }
-      document.getElementById('games-table').innerHTML = '<table><tr><th>玩家</th><th>地区</th><th>结果</th><th>时长(s)</th><th>击杀</th><th>连击</th><th>金币</th><th>难度</th><th>模式</th><th>时间</th></tr>' +
+      document.getElementById('games-table').innerHTML = '<table style="table-layout:fixed;"><tr><th>玩家</th><th>地区</th><th>平台</th><th>新</th><th>结果</th><th>时长</th><th>击杀</th><th>连击</th><th>金币</th><th>难度</th><th>帧率</th><th>法宝</th><th>模式</th><th>时间</th></tr>' +
         data.map(g => `<tr>
-          <td style="font-family:monospace;font-size:11px;color:#94a3b8;">${(g.player_id || '').slice(0,12)}</td>
+          <td style="font-family:monospace;font-size:11px;color:#94a3b8;">${(g.player_id || '').slice(0,8)}</td>
           <td style="color:#94a3b8;font-size:11px;">${fmtLoc(g)}</td>
+          <td style="color:#64748b;font-size:11px;">${g.platform || '-'}</td>
+          <td style="color:${g.is_new_player ? '#fbbf24' : '#64748b'};font-size:11px;">${g.is_new_player ? '新' : ''}</td>
           <td><span class="badge ${g.result === 'victory' ? 'badge-ok' : 'badge-err'}">${g.result === 'victory' ? '胜利' : '失败'}</span></td>
           <td>${Math.round(g.survival_seconds || 0)}</td>
           <td>${g.kills || 0}</td>
           <td>${g.max_combo || 0}</td>
           <td>${g.gold_earned || 0}</td>
           <td>${g.difficulty || 0}</td>
-          <td>${g.game_mode || 'normal'}</td>
+          <td style="color:${(g.avg_fps || 0) < 30 ? '#f87171' : '#94a3b8'};font-size:11px;">${g.avg_fps || '-'}</td>
+          <td style="font-size:11px;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#94a3b8;">${(function(){ try{const a=JSON.parse(g.artifacts);return Object.entries(a).filter(e=>e[1]).map(e=>e[0]+'x'+e[1]).join(' ') }catch(e){return g.artifacts||'-'} })()}</td>
+          <td>${fmtMode(g.game_mode)}</td>
           <td style="color:#64748b;font-size:11px;">${formatDate(g.ended_at)}</td>
         </tr>`).join('') + '</table>';
     } else {
@@ -287,9 +305,34 @@ async function refreshErrors() {
         });
       }
     }
+
+    if (data.list && data.list.length > 0) {
+      document.getElementById('error-list').innerHTML = '<table style="table-layout:fixed;"><tr><th style="width:40px;">ID</th><th>消息</th><th style="width:80px;">存活(s)</th><th style="width:80px;">时间</th><th style="width:50px;"></th></tr>' +
+        data.list.map(e => `<tr>
+          <td style="color:#64748b;font-size:11px;font-family:monospace;">${e.id}</td>
+          <td style="color:#fca5a5;font-family:monospace;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${e.message} ${e.player_id ? '[' + e.player_id.slice(0,6) + ']' : ''}</td>
+          <td style="color:#94a3b8;font-size:11px;">${e.survival_time || 0}</td>
+          <td style="color:#64748b;font-size:11px;">${formatDate(e.created_at)}</td>
+          <td><button class="refresh-btn" onclick="deleteError(${e.id})" style="padding:2px 8px;font-size:11px;">删除</button></td>
+        </tr>`).join('') + '</table>';
+    } else {
+      document.getElementById('error-list').innerHTML = '<div style="text-align:center;color:#64748b;padding:20px;">暂无错误记录</div>';
+    }
   } catch(e) {
     document.querySelector('#error-cards').innerHTML = '<div class="error-msg">加载失败: ' + e.message + '</div>';
   }
+}
+
+async function clearErrors() {
+  if (!confirm('确定清空所有错误记录？')) return;
+  await fetch('/api/error/log', { method: 'DELETE' });
+  refreshErrors();
+}
+
+async function deleteError(id) {
+  if (!confirm('确定删除此错误记录？')) return;
+  await fetch('/api/error/log?id=' + id, { method: 'DELETE' });
+  refreshErrors();
 }
 
 document.querySelectorAll('.tab').forEach(tab => {

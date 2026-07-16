@@ -2045,6 +2045,7 @@ class Game {
     this.messageTimer = 0;
     this.artifacts = [];
     this.artifactTimer = 200;
+    this._artifactCounts = { heal:0, shield:0, splash_range:0, splash_power:0, fire_shell:0, gravity:0, chain_lightning:0, repulse:0, tomato_apocalypse:0 };
     this.lastTime = performance.now();
     this.bonusHp = 0;
     // Challenge goal
@@ -2146,6 +2147,8 @@ class Game {
     this.gameMode = 'challenge';
     this.generateGoal();
         this.debugInfo = { fps: 0, dt: 0, frameCount: 0, fpsTimer: 0, showDebug: false, record: [], errors: [], audioLog: [] };
+    this._fpsTotal = 0;
+    this._fpsSamples = 0;
         // GPU / Canvas 检测
         (() => {
           const info = { canvasPixels: 0 };
@@ -3159,6 +3162,7 @@ class Game {
   }
 
   collectArtifact(a) {
+    this._artifactCounts[a.type.id] = (this._artifactCounts[a.type.id] || 0) + 1;
     if (a.type.id === 'heal') {
       this.egg.hp = Math.min(this.egg.hp + 1, this.egg.maxHp);
       SFX.healArtifact();
@@ -5723,6 +5727,10 @@ class Game {
   _reportGameEnd(result) {
     try {
       const pid = localStorage.getItem('hb_pid') || '';
+      const sys = this.getSystemInfo();
+      const platform = sys.platform + '/' + sys.browser;
+      const avg_fps = this._fpsSamples > 0 ? Math.round(this._fpsTotal / this._fpsSamples * 10) / 10 : 0;
+      const is_new_player = this.totalGamesPlayed === 0 ? 1 : 0;
       fetch('/api/game/end', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -5734,7 +5742,11 @@ class Game {
           max_combo: this.maxCombo || 0,
           gold_earned: this.gold || 0,
           difficulty: Math.round(this.difficulty * 10) / 10 || 0,
-          game_mode: this.gameMode || 'normal'
+          game_mode: this.gameMode || 'normal',
+          platform,
+          avg_fps,
+          is_new_player,
+          artifacts: JSON.stringify(this._artifactCounts)
         })
       }).catch(() => {});
     } catch(e) {}
@@ -7103,6 +7115,8 @@ function gameLoop(time) {
       }
       if (time - game.debugInfo.fpsTimer > 1000) {
         game.debugInfo.fps = game.debugInfo.frameCount;
+        game._fpsTotal += game.debugInfo.frameCount;
+        game._fpsSamples++;
         game.debugInfo.frameCount = 0;
         game.debugInfo.fpsTimer = time;
       }
