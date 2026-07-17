@@ -18,7 +18,7 @@ export async function onRequest(context) {
   const cursor = new Date(twentyFourHoursAgo);
   cursor.setSeconds(0, 0);
   while (cursor < now) {
-    const key = cursor.toISOString().slice(0, 19) + ':00';
+    const key = cursor.toISOString().slice(0, 19);
     filled.push({ recorded_at: key, count: countMap.get(key) || 0 });
     cursor.setMinutes(cursor.getMinutes() + 1);
   }
