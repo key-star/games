@@ -2031,6 +2031,7 @@ class Game {
     this.difficulty = 0;
     this.nearMissTimer = 0;
     this.nearMissCount = 0;
+    this.damageAmount = 0;
     this.unlockedSkins = ['普通蛋'];
     this.skinPoints = 0;
     this.achievements = [];
@@ -2549,6 +2550,7 @@ class Game {
     this.spawnTimer = 0;
     this.nearMissTimer = 0;
     this.nearMissCount = 0;
+    this.damageAmount = 0;
     this.egg = new Egg();
     this.egg.maxHp = this.getMaxHp();
     this.egg.hp = this.egg.maxHp;
@@ -3061,6 +3063,7 @@ class Game {
         const power = 1 - eggD / blastR;
         this.egg.hp -= Math.ceil(power * 2);
         this.egg.invincible = 15;
+        this.damageAmount += Math.ceil(power * 2);
         for (let i = 0; i < 8; i++) {
           const a = Math.random() * Math.PI * 2;
           this.particles.push(acquireParticle(this.egg.pos.x, this.egg.pos.y, Math.cos(a) * 5, Math.sin(a) * 5, 4, '#ff6d00', 20));
@@ -3594,6 +3597,7 @@ class Game {
         } else {
           // Take damage
           this.egg.hp--;
+          this.damageAmount++;
           SFX.hit();
           this.egg.invincible = 30;
           this.perfectRoundThisRound = false;
@@ -5739,7 +5743,9 @@ class Game {
           survival_seconds: Math.round(this.survivalTime),
           result: result,
           kills: this.sessionKills || 0,
-          max_combo: this.maxCombo || 0,
+          damage_amount: this.damageAmount || 0,
+          remaining_hp: this.egg.hp || 0,
+
           gold_earned: this.gold || 0,
           difficulty: Math.round(this.difficulty * 10) / 10 || 0,
           game_mode: this.gameMode || 'normal',
