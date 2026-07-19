@@ -5749,6 +5749,7 @@ class Game {
           gold_earned: this.gold || 0,
           difficulty: Math.round(this.difficulty * 10) / 10 || 0,
           game_mode: this.gameMode || 'normal',
+          challenge_goal: this.gameMode === 'challenge' ? this.challengeGoal : 0,
           platform,
           avg_fps,
           is_new_player,
