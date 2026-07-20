@@ -7183,7 +7183,8 @@ HLRecorder.init();
   let pid = localStorage.getItem('hb_pid');
   if (!pid) { pid = crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2,10); localStorage.setItem('hb_pid', pid); }
   function beat() {
-    fetch('/api/online/heartbeat', { method:'POST', body: JSON.stringify({ player_id: pid }), headers:{'Content-Type':'application/json'} }).catch(()=>{});
+    const _sys = (typeof game !== 'undefined' && game && game.getSystemInfo) ? game.getSystemInfo() : (function(){ const ua=navigator.userAgent; let p='unknown',b='unknown'; if(/android/i.test(ua)) p='android'; else if(/iphone|ipad|ipod/i.test(ua)) p='ios'; else if(/win/i.test(ua)) p='windows'; else if(/mac/i.test(ua)) p='macos'; else if(/linux/i.test(ua)) p='linux'; if(/micromessenger/i.test(ua)) b='wechat'; else if(/edg/i.test(ua)) b='edge'; else if(/chrome/i.test(ua)&&!/edg/i.test(ua)) b='chrome'; else if(/safari/i.test(ua)&&!/chrome/i.test(ua)&&!/edg/i.test(ua)&&!/micromessenger/i.test(ua)) b='safari'; else if(/firefox/i.test(ua)) b='firefox'; return {platform:p,browser:b}; })();
+    fetch('/api/online/heartbeat', { method:'POST', body: JSON.stringify({ player_id: pid, platform: _sys.platform + '/' + _sys.browser }), headers:{'Content-Type':'application/json'} }).catch(()=>{});
   }
   beat();
   setInterval(beat, 30000);

@@ -44,8 +44,8 @@ tr:hover td { background:#334155; }
 <div class="tabs">
   <button class="tab active" data-tab="overview">概览</button>
   <button class="tab" data-tab="games">对局</button>
-  <button class="tab" data-tab="errors">错误</button>
   <button class="tab" data-tab="players">玩家</button>
+  <button class="tab" data-tab="errors">错误</button>
 </div>
 
 <div id="tab-overview">
@@ -284,7 +284,7 @@ async function refreshGames() {
           <td style="color:${g.is_new_player ? '#fbbf24' : '#64748b'};font-size:11px;">${g.is_new_player ? '新' : '-'}</td>
           <td><span class="badge ${g.result === 'victory' ? 'badge-ok' : 'badge-err'}">${g.result === 'victory' ? '胜利' : '失败'}</span></td>
           <td>${Math.round(g.survival_seconds || 0)}</td>
-          <td style="text-align:center;">${g.challenge_goal > 0 ? g.challenge_goal + 's' : '-'}</td>
+          <td>${g.challenge_goal > 0 ? g.challenge_goal + 's' : '-'}</td>
           <td>${g.kills || 0}</td>
           <td>${g.damage_amount || 0}</td>
           <td>${g.remaining_hp != null ? g.remaining_hp : '-'}</td>
@@ -460,14 +460,14 @@ function filterPlayers() {
       '<td style="font-family:monospace;font-size:11px;color:#94a3b8;max-width:120px;overflow:hidden;text-overflow:ellipsis;" title="' + (p.player_id || '') + '">' + (p.player_id || '').slice(0, 8) + '</td>' +
       '<td style="font-size:12px;color:#94a3b8;white-space:nowrap;">' + fmtLoc(p) + '</td>' +
       '<td style="font-size:12px;color:#64748b;white-space:nowrap;">' + (p.platform || '-') + '</td>' +
-      '<td style="text-align:center;">' + (p.games_played || 0) + '</td>' +
-      '<td style="text-align:center;color:#86efac;">' + (p.wins || 0) + '</td>' +
-      '<td style="text-align:center;color:#fca5a5;">' + (p.losses || 0) + '</td>' +
-      '<td style="text-align:center;color:#fde047;">' + pct(p.wins, p.games_played) + '</td>' +
-      '<td style="text-align:right;white-space:nowrap;">' + formatPlayTime(p.total_play_time) + '</td>' +
-      '<td style="text-align:right;white-space:nowrap;">' + (p.avg_survival != null ? Math.round(p.avg_survival) + 's' : '-') + '</td>' +
-      '<td style="text-align:right;white-space:nowrap;">' + (p.best_survival != null ? Math.round(p.best_survival) + 's' : '-') + '</td>' +
-      '<td style="text-align:center;">' + (p.avg_fps != null ? p.avg_fps : '-') + '</td>' +
+      '<td>' + (p.games_played || 0) + '</td>' +
+      '<td style="color:#86efac;">' + (p.wins || 0) + '</td>' +
+      '<td style="color:#fca5a5;">' + (p.losses || 0) + '</td>' +
+      '<td style="color:#fde047;">' + pct(p.wins, p.games_played) + '</td>' +
+      '<td style="white-space:nowrap;">' + formatPlayTime(p.total_play_time) + '</td>' +
+      '<td style="white-space:nowrap;">' + (p.avg_survival != null ? Math.round(p.avg_survival) + 's' : '-') + '</td>' +
+      '<td style="white-space:nowrap;">' + (p.best_survival != null ? Math.round(p.best_survival) + 's' : '-') + '</td>' +
+      '<td>' + (p.avg_fps != null ? p.avg_fps : '-') + '</td>' +
       '<td style="font-size:11px;color:#64748b;white-space:nowrap;">' + fmtDate(p.first_seen) + '</td>' +
       '<td style="font-size:11px;color:#64748b;white-space:nowrap;">' + fmtDate(p.last_seen) + '</td>' +
     '</tr>').join('') + '</table>';

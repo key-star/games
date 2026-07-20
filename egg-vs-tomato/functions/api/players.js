@@ -17,7 +17,7 @@ export async function onRequest(context) {
       g.avg_survival,
       g.best_survival,
       g.avg_fps,
-      lp.platform
+      COALESCE(h.platform, lp.platform) AS platform
     FROM (
       SELECT *, ROW_NUMBER() OVER (PARTITION BY player_id ORDER BY seen_at DESC) AS rn
       FROM heartbeat
