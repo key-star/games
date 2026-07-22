@@ -2025,6 +2025,11 @@ class Game {
     this.comboCount = 0;
     this.maxCombo = 0;
     this.state = 'menu';
+    this.showLeaderboard = false;
+    this.leaderboardData = null;
+    this.showNicknameEdit = false;
+    this.nicknameText = '';
+    this._nicknameInputEl = null;
     this.spawnTimer = 0;
     this.survivalTime = 0;
     this.bestTime = 0;
@@ -2386,6 +2391,13 @@ class Game {
 
   loadProgress() {
     try {
+      const pid = localStorage.getItem('hb_pid') || '';
+      let nick = localStorage.getItem('egg_nickname');
+      if (!nick) {
+        nick = '蛋蛋_' + pid.slice(0, 4);
+        localStorage.setItem('egg_nickname', nick);
+      }
+      this.nicknameText = nick;
       const d = JSON.parse(localStorage.getItem('egg_defense') || '{}');
       this.unlockedSkins = d.unlockedSkins || ['普通蛋'];
       this.currentSkin = d.currentSkin || '普通蛋';
@@ -2419,6 +2431,7 @@ class Game {
 
   saveProgress() {
     const data = {
+      nickname: localStorage.getItem('egg_nickname') || '',
       unlockedSkins: this.unlockedSkins,
       currentSkin: this.currentSkin,
       skinPoints: this.skinPoints,
@@ -2463,6 +2476,12 @@ class Game {
       this.survivalHistory = d.survivalHistory || [];
       // Also persist to localStorage so it's available offline
       try { localStorage.setItem('egg_defense', JSON.stringify(d)); } catch(e) {}
+      if (d.nickname) {
+        localStorage.setItem('egg_nickname', d.nickname);
+        localStorage.setItem('egg_nickname_set', '1');
+        this.nicknameText = d.nickname;
+        if (this._nicknameInputEl) this._nicknameInputEl.value = d.nickname;
+      }
       this.draw();
     }).catch(() => {});
   }
@@ -2527,6 +2546,7 @@ class Game {
   }
 
   startGame() {
+    this._removeNicknameInput();
     // Reset joystick state
     this.joystickActive = false;
     this.joystickDir = { x: 0, y: 0 };
@@ -2645,6 +2665,10 @@ class Game {
         this.tutorialIndex = 0;
       }
     } catch(e) {}
+    // First-time nickname edit (default was auto-set, prompt to customize)
+    if (!localStorage.getItem('egg_nickname_set') && !this.showTutorial) {
+      this._openNicknameDialog();
+    }
     SFX.startBGM();
   }
 
@@ -4139,7 +4163,7 @@ class Game {
 
   draw() {
     ctx.clearRect(0, 0, CW, CH);
-    if (this.state === 'menu') { this.drawMenu(); this.drawTransitionOverlay(); if (this.showHighlightGallery) this.drawHighlightGallery(); return; }
+    if (this.state === 'menu') { this.drawMenu(); this.drawTransitionOverlay(); if (this.showHighlightGallery) this.drawHighlightGallery(); if (this.showLeaderboard) this.drawLeaderboard(); if (this.showNicknameEdit) this.drawNicknameDialog(); return; }
     if (this.state === 'gameover') { this.drawGameOver(); this.drawTransitionOverlay(); if (this.showHighlightGallery) this.drawHighlightGallery(); return; }
     if (this.state === 'victoryscreen') { this.drawVictoryScreen(); this.drawTransitionOverlay(); if (this.showHighlightGallery) this.drawHighlightGallery(); return; }
     if (this.state === 'shop' || this.state === 'preshop') { this.drawShopField(); this.drawShop(); this.drawTransitionOverlay(); if (this.showTutorial) this.drawTutorial(); return; }
@@ -5000,16 +5024,25 @@ class Game {
     ctx.fillText('📹', recX + toggleSize / 2, toggleY + toggleSize / 2);
     ctx.textBaseline = 'alphabetic';
 
-    // Egg skin preview
-    this.drawSkinPreview(CX, CY - V * .08, SIZE * .055, this.currentSkin);
+    // Egg skin preview (shifted left+down to avoid overlapping description)
+    const skinX = CX - SIZE * .08;
+    const skinY = CY - V * .04;
+    this.drawSkinPreview(skinX, skinY, SIZE * .055, this.currentSkin);
+
+    // Nickname next to egg
+    ctx.fillStyle = '#8aa899';
+    ctx.font = `${SIZE * .028}px Arial`;
+    ctx.textBaseline = 'middle';
+    ctx.textAlign = 'left';
+    ctx.fillText('🐣 ' + this.nicknameText + '  ✏️', CX + SIZE * .02, skinY);
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'alphabetic';
 
     // Skin name + HP
     const showMaxHp = this.getMaxHp();
     ctx.fillStyle = '#5a8a69';
     ctx.font = `bold ${SIZE * .042}px Arial`;
     ctx.fillText(`🏆 ${skinLabel[this.currentSkin] || '普通蛋'}  ❤${showMaxHp}`, CX, CY + V * .07);
-
-    // Skin progress removed (no积分系统)
 
     // Mode selector buttons
     const modeBtnW = SIZE * .16, modeBtnH = SIZE * .055;
@@ -5035,8 +5068,19 @@ class Game {
     ctx.font = `bold ${SIZE * .028}px Arial`;
     ctx.fillText('无尽生存', endX + modeBtnW / 2, modeBtnY + modeBtnH * .68);
 
+    // Leaderboard button
+    const leaderBtnY = modeBtnY + modeBtnH + SIZE * .025;
+    const leaderBtnH = SIZE * .05;
+    ctx.fillStyle = '#ffb174';
+    ctx.beginPath();
+    ctx.roundRect(CX - SIZE * .18, leaderBtnY, SIZE * .36, leaderBtnH, 8);
+    ctx.fill();
+    ctx.fillStyle = '#fff';
+    ctx.font = `bold ${SIZE * .028}px Arial`;
+    ctx.fillText('🏆 排行榜', CX, leaderBtnY + leaderBtnH * .68);
+
     // Start button
-    const startBtnY = CY + V * .24;
+    const startBtnY = leaderBtnY + leaderBtnH + SIZE * .03;
     const startBtnH = SIZE * .07;
     ctx.fillStyle = '#81c784';
     ctx.beginPath();
@@ -5735,11 +5779,13 @@ class Game {
       const platform = sys.platform + '/' + sys.browser;
       const avg_fps = this._fpsSamples > 0 ? Math.round(this._fpsTotal / this._fpsSamples * 10) / 10 : 0;
       const is_new_player = this.totalGamesPlayed === 0 ? 1 : 0;
+      const nickname = localStorage.getItem('egg_nickname') || '';
       fetch('/api/game/end', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           player_id: pid,
+          player_name: nickname,
           survival_seconds: Math.round(this.survivalTime),
           result: result,
           kills: this.sessionKills || 0,
@@ -6105,6 +6151,255 @@ class Game {
     ctx.restore();
   }
 
+  fetchLeaderboard() {
+    fetch('/api/leaderboard')
+      .then(r => r.json())
+      .then(data => {
+        this.leaderboardData = data;
+        if (this.showLeaderboard) this.draw();
+      })
+      .catch(() => {});
+  }
+
+  drawLeaderboard() {
+    ctx.fillStyle = 'rgba(0,0,0,.45)';
+    ctx.fillRect(0, 0, CW, CH);
+    const lw = SIZE * .82, lh = SIZE * .74;
+    const lx = CX - lw / 2, ly = CY - lh / 2;
+    ctx.save();
+    ctx.shadowColor = 'rgba(0,0,0,.4)';
+    ctx.shadowBlur = 40;
+    ctx.shadowOffsetY = 6;
+    ctx.fillStyle = '#fff';
+    ctx.beginPath();
+    ctx.roundRect(lx, ly, lw, lh, 18);
+    ctx.fill();
+    ctx.restore();
+    // Title
+    ctx.fillStyle = '#4a7c59';
+    ctx.font = `bold ${SIZE * .05}px Arial`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('🏆 排行榜', CX, ly + SIZE * .07);
+    // Table header
+    const medals = ['🥇', '🥈', '🥉'];
+    const colRanks = [SIZE * .05, SIZE * .13, SIZE * .40, SIZE * .59, SIZE * .72];
+    const headerY = ly + SIZE * .13;
+    const rowH = SIZE * .042;
+    ctx.fillStyle = '#94a3b8';
+    ctx.font = `bold ${SIZE * .021}px Arial`;
+    ctx.textBaseline = 'middle';
+    const headers = ['排名', '玩家', '最佳存活', '总局数', '模式'];
+    for (let i = 0; i < headers.length; i++) {
+      ctx.textAlign = i === 0 ? 'center' : 'left';
+      ctx.fillText(headers[i], lx + colRanks[i], headerY);
+    }
+    // Divider
+    ctx.strokeStyle = '#e2e8f0';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(lx + SIZE * .04, headerY + SIZE * .016);
+    ctx.lineTo(lx + lw - SIZE * .04, headerY + SIZE * .016);
+    ctx.stroke();
+    // Rows
+    const data = this.leaderboardData || [];
+    ctx.textBaseline = 'middle';
+    for (let i = 0; i < 10; i++) {
+      const ry = headerY + SIZE * .025 + (i + 1) * rowH;
+      if (ry + rowH / 2 > ly + lh - SIZE * .10) break;
+      if (i < data.length) {
+        const d = data[i];
+        const secs = Math.floor(d.survival_seconds);
+        const m = Math.floor(secs / 60);
+        const s = secs % 60;
+        const timeStr = m > 0 ? `${m}m ${s}s` : `${s}s`;
+        const modeLabel = d.game_mode === 'challenge' ? '挑战' : '无尽';
+        const pid = d.player_name || (d.player_id || '').slice(0, 8);
+        // Rank number (top 3 with medal)
+        if (i < 3) {
+          ctx.font = `${SIZE * .024}px Arial`;
+          ctx.fillStyle = '#f59e0b';
+          ctx.textAlign = 'center';
+          ctx.fillText(medals[i], lx + colRanks[0], ry);
+        } else {
+          ctx.font = `${SIZE * .02}px Arial`;
+          ctx.fillStyle = '#94a3b8';
+          ctx.textAlign = 'center';
+          ctx.fillText(i + 1, lx + colRanks[0], ry);
+        }
+        // Player ID
+        ctx.font = `${SIZE * .021}px Arial`;
+        ctx.fillStyle = '#334155';
+        ctx.textAlign = 'left';
+        ctx.fillText(pid, lx + colRanks[1], ry);
+        // Survival time
+        ctx.fillStyle = '#10b981';
+        ctx.textAlign = 'left';
+        ctx.fillText(timeStr, lx + colRanks[2], ry);
+        // Total games
+        ctx.fillStyle = '#94a3b8';
+        ctx.textAlign = 'left';
+        ctx.fillText(d.total_games, lx + colRanks[3], ry);
+        // Mode
+        ctx.fillStyle = d.game_mode === 'challenge' ? '#66bb6a' : '#ef5350';
+        ctx.textAlign = 'left';
+        ctx.font = `${SIZE * .02}px Arial`;
+        ctx.fillText(modeLabel, lx + colRanks[4], ry);
+      } else {
+        ctx.fillStyle = '#cbd5e1';
+        ctx.font = `${SIZE * .02}px Arial`;
+        ctx.textAlign = 'center';
+        ctx.fillText('—', lx + lw / 2, ry);
+      }
+    }
+    // Close button
+    const btnY = ly + lh - SIZE * .09;
+    const btnH = SIZE * .05;
+    const btnW = SIZE * .20;
+    ctx.fillStyle = '#e2e8f0';
+    ctx.beginPath();
+    ctx.roundRect(CX - btnW / 2, btnY, btnW, btnH, 8);
+    ctx.fill();
+    ctx.fillStyle = '#64748b';
+    ctx.font = `bold ${SIZE * .026}px Arial`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('关闭', CX, btnY + btnH / 2);
+  }
+
+  _openNicknameDialog() {
+    this.showNicknameEdit = true;
+    this.nicknameText = localStorage.getItem('egg_nickname') || '';
+    this.draw();
+    setTimeout(() => this._createNicknameInput(), 50);
+  }
+
+  _createNicknameInput() {
+    this._removeNicknameInput();
+    const lw = SIZE * .8, lh = SIZE * .44;
+    const lx = CX - lw / 2, ly = CY - lh / 2;
+    const fieldY = ly + SIZE * .23;
+    const fieldH = SIZE * .055;
+    const fieldW = lw * .7;
+    const fieldX = CX - fieldW / 2;
+    const rect = canvas.getBoundingClientRect();
+    const sx = rect.left + (fieldX / CW) * rect.width;
+    const sy = rect.top + (fieldY / CH) * rect.height;
+    const sw = (fieldW / CW) * rect.width;
+    const sh = (fieldH / CH) * rect.height;
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.maxLength = 12;
+    input.value = this.nicknameText;
+    input.style.cssText = `position:fixed;left:${sx}px;top:${sy}px;width:${sw}px;height:${sh}px;border:2px solid #ffb174;border-radius:8px;padding:0 10px;font:16px Arial;outline:none;background:#fff;z-index:1000;box-sizing:border-box;`;
+    input.addEventListener('input', () => { this.nicknameText = input.value; });
+    input.addEventListener('keydown', e => {
+      if (e.key === 'Enter') { this._confirmNickname(); }
+      if (e.key === 'Escape') { this._cancelNickname(); }
+    });
+    document.body.appendChild(input);
+    this._nicknameInputEl = input;
+    input.focus();
+    input.select();
+  }
+
+  _removeNicknameInput() {
+    if (this._nicknameInputEl) {
+      this._nicknameInputEl.remove();
+      this._nicknameInputEl = null;
+    }
+  }
+
+  _confirmNickname() {
+    const name = this.nicknameText.trim();
+    if (name) {
+      this.nicknameText = name;
+      localStorage.setItem('egg_nickname', name);
+      localStorage.setItem('egg_nickname_set', '1');
+      this.saveProgress();
+    }
+    this._removeNicknameInput();
+    this.showNicknameEdit = false;
+    this.draw();
+  }
+
+  _cancelNickname() {
+    this._removeNicknameInput();
+    this.showNicknameEdit = false;
+    this.draw();
+  }
+
+  drawNicknameDialog() {
+    ctx.fillStyle = 'rgba(0,0,0,.45)';
+    ctx.fillRect(0, 0, CW, CH);
+    const lw = SIZE * .8, lh = SIZE * .44;
+    const lx = CX - lw / 2, ly = CY - lh / 2;
+    ctx.save();
+    ctx.shadowColor = 'rgba(0,0,0,.4)';
+    ctx.shadowBlur = 40;
+    ctx.shadowOffsetY = 6;
+    ctx.fillStyle = '#fff';
+    ctx.beginPath();
+    ctx.roundRect(lx, ly, lw, lh, 18);
+    ctx.fill();
+    ctx.restore();
+    // Title
+    ctx.fillStyle = '#4a7c59';
+    ctx.font = `bold ${SIZE * .05}px Arial`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('✏️ 设置昵称', CX, ly + SIZE * .09);
+    // Input label and field
+    ctx.fillStyle = '#94a3b8';
+    ctx.font = `${SIZE * .024}px Arial`;
+    ctx.fillText('🐣 昵称', CX, ly + SIZE * .18);
+    const fieldY = ly + SIZE * .23;
+    const fieldH = SIZE * .055;
+    const fieldW = lw * .7;
+    const fieldX = CX - fieldW / 2;
+    ctx.fillStyle = '#f8fafc';
+    ctx.beginPath();
+    ctx.roundRect(fieldX, fieldY, fieldW, fieldH, 8);
+    ctx.fill();
+    ctx.strokeStyle = '#e2e8f0';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.roundRect(fieldX, fieldY, fieldW, fieldH, 8);
+    ctx.stroke();
+    // Input hint text (if empty)
+    if (!this.nicknameText) {
+      ctx.fillStyle = '#cbd5e1';
+      ctx.font = `${SIZE * .024}px Arial`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('输入昵称（最多12字）', CX, fieldY + fieldH / 2);
+    }
+    // Buttons
+    const btnY = ly + lh - SIZE * .11;
+    const btnH2 = SIZE * .05;
+    const btnW2 = SIZE * .22;
+    const gap = SIZE * .06;
+    const cancelX = CX - btnW2 - gap / 2;
+    const confirmX = CX + gap / 2;
+    // Cancel
+    ctx.fillStyle = '#e2e8f0';
+    ctx.beginPath();
+    ctx.roundRect(cancelX, btnY, btnW2, btnH2, 8);
+    ctx.fill();
+    ctx.fillStyle = '#64748b';
+    ctx.font = `bold ${SIZE * .026}px Arial`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('取消', cancelX + btnW2 / 2, btnY + btnH2 / 2);
+    // Confirm
+    ctx.fillStyle = '#81c784';
+    ctx.beginPath();
+    ctx.roundRect(confirmX, btnY, btnW2, btnH2, 8);
+    ctx.fill();
+    ctx.fillStyle = '#fff';
+    ctx.fillText('确认', confirmX + btnW2 / 2, btnY + btnH2 / 2);
+  }
+
   drawCuteTomato(x, y, r) {
     ctx.save();
     // Body (red circle)
@@ -6292,6 +6587,52 @@ class Game {
       }
       return;
     }
+    if (this.showLeaderboard) {
+      const lw = SIZE * .82, lh = SIZE * .74;
+      const lx = CX - lw / 2, ly = CY - lh / 2;
+      const btnY = ly + lh - SIZE * .09;
+      const btnH = SIZE * .05;
+      const btnW = SIZE * .20;
+      // Close button
+      if (x > CX - btnW / 2 && x < CX + btnW / 2 && y > btnY && y < btnY + btnH) {
+        this.showLeaderboard = false;
+        this.draw();
+        return;
+      }
+      // Click outside card = close
+      if (x < lx || x > lx + lw || y < ly || y > ly + lh) {
+        this.showLeaderboard = false;
+        this.draw();
+        return;
+      }
+      return;
+    }
+    if (this.showNicknameEdit) {
+      const lw = SIZE * .8, lh = SIZE * .44;
+      const lx = CX - lw / 2, ly = CY - lh / 2;
+      const btnY = ly + lh - SIZE * .11;
+      const btnH2 = SIZE * .05;
+      const btnW2 = SIZE * .22;
+      const gap = SIZE * .06;
+      const cancelX = CX - btnW2 - gap / 2;
+      const confirmX = CX + gap / 2;
+      // Confirm button
+      if (x > confirmX && x < confirmX + btnW2 && y > btnY && y < btnY + btnH2) {
+        this._confirmNickname();
+        return;
+      }
+      // Cancel button
+      if (x > cancelX && x < cancelX + btnW2 && y > btnY && y < btnY + btnH2) {
+        this._cancelNickname();
+        return;
+      }
+      // Outside card = cancel
+      if (x < lx || x > lx + lw || y < ly || y > ly + lh) {
+        this._cancelNickname();
+        return;
+      }
+      return;
+    }
     if (this.state === 'menu') {
       const V = Math.max(SIZE, CH * .7);
       // Top-left toggle buttons: sound + debug
@@ -6352,8 +6693,24 @@ class Game {
         this.gameMode = 'endless';
         return;
       }
+      // Nickname edit (next to egg)
+      const nickY = CY - V * .04;
+      const nickH = SIZE * .04;
+      if (y > nickY - nickH && y < nickY + nickH && x > CX + SIZE * .02 && x < CX + SIZE * .40) {
+        this._openNicknameDialog();
+        return;
+      }
+      // Leaderboard button
+      const leaderBtnY = modeBtnY + modeBtnH + SIZE * .025;
+      const leaderBtnH = SIZE * .05;
+      if (x > CX - SIZE * .18 && x < CX + SIZE * .18 && y > leaderBtnY && y < leaderBtnY + leaderBtnH) {
+        this.showLeaderboard = true;
+        if (!this.leaderboardData) this.fetchLeaderboard();
+        this.draw();
+        return;
+      }
       // Start button
-      const startBtnY = CY + V * .24;
+      const startBtnY = leaderBtnY + leaderBtnH + SIZE * .03;
       const startBtnH = SIZE * .07;
       if (x > CX - SIZE * .18 && x < CX + SIZE * .18 && y > startBtnY && y < startBtnY + startBtnH) {
         this.startGame();
