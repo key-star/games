@@ -49,11 +49,10 @@ tr:hover td { background:#334155; }
 </div>
 
 <div id="tab-overview">
-  <div class="card" style="display:flex;justify-content:space-between;align-items:center;">
+  <div class="card" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;">
     <div class="section-title" style="margin-bottom:0;">概览</div>
     <button class="refresh-btn" onclick="refresh()">刷新</button>
-  </div>
-  <div class="card row" id="overview-cards">
+    <div class="row" id="overview-cards" style="width:100%;margin-top:16px;">
     <div class="stat-box"><div class="stat-label">当前在线</div><div class="stat-value" id="v-online">--</div><div class="stat-unit">人</div></div>
     <div class="stat-box"><div class="stat-label">24h 活跃 (DAU)</div><div class="stat-value" id="v-dau">--</div><div class="stat-unit">人</div></div>
     <div class="stat-box"><div class="stat-label">累计玩家</div><div class="stat-value" id="v-totalPlayers">--</div><div class="stat-unit">人</div></div>
@@ -121,7 +120,10 @@ tr:hover td { background:#334155; }
 <div id="tab-players" class="hidden">
   <div class="card">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
-      <div class="section-title">玩家列表</div>
+      <div style="display:flex;align-items:center;gap:12px;">
+        <div class="section-title" style="margin-bottom:0;">玩家列表</div>
+        <span style="font-size:12px;color:#64748b;" id="players-count"></span>
+      </div>
       <div style="display:flex;gap:8px;align-items:center;">
         <input type="text" id="player-search" placeholder="搜索玩家 ID / 地区 / 平台..." oninput="filterPlayers()" style="background:#0f172a;border:1px solid #334155;border-radius:6px;padding:6px 12px;color:#e2e8f0;font-size:13px;width:280px;outline:none;">
         <button class="refresh-btn" onclick="refreshPlayers()">刷新</button>
@@ -130,7 +132,6 @@ tr:hover td { background:#334155; }
     <div style="overflow-x:auto;">
       <div id="players-table"><div class="loading">加载中...</div></div>
     </div>
-    <div style="margin-top:12px;font-size:12px;color:#64748b;text-align:right;" id="players-count"></div>
   </div>
 </div>
 
