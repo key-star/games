@@ -49,16 +49,16 @@ tr:hover td { background:#334155; }
 </div>
 
 <div id="tab-overview">
-  <div class="card" style="display:flex;justify-content:space-between;align-items:center;">
+  <div class="card" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;">
     <div class="section-title" style="margin-bottom:0;">概览</div>
     <button class="refresh-btn" onclick="refresh()">刷新</button>
-  </div>
-  <div class="card row" id="overview-cards">
+    <div class="row" id="overview-cards" style="width:100%;margin-top:16px;">
     <div class="stat-box"><div class="stat-label">当前在线</div><div class="stat-value" id="v-online">--</div><div class="stat-unit">人</div></div>
     <div class="stat-box"><div class="stat-label">24h 活跃 (DAU)</div><div class="stat-value" id="v-dau">--</div><div class="stat-unit">人</div></div>
     <div class="stat-box"><div class="stat-label">累计玩家</div><div class="stat-value" id="v-totalPlayers">--</div><div class="stat-unit">人</div></div>
     <div class="stat-box"><div class="stat-label">总对局数</div><div class="stat-value" id="v-totalGames">--</div><div class="stat-unit">局</div></div>
     <div class="stat-box"><div class="stat-label">平均时长</div><div class="stat-value" id="v-avgSurvival">--</div><div class="stat-unit">秒</div></div>
+  </div>
   </div>
 
   <div class="card">
