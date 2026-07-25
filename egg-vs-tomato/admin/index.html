@@ -155,6 +155,11 @@ function fmtMode(m) {
   return m === 'challenge' ? '生存挑战' : '无尽生存';
 }
 
+function fmtPlayer(p) {
+  if (p.nickname) return p.nickname;
+  return '<span style="color:#475569;font-family:monospace;font-size:11px;">' + (p.player_id || '').slice(0, 8) + '</span>';
+}
+
 function buildRegionLegend(labels, data, colors) {
   const el = document.getElementById('region-legend');
   if (!el) return;
@@ -253,7 +258,7 @@ async function refresh() {
     if (recent.length > 0) {
       document.getElementById('recent-games').innerHTML = '<table><tr><th>玩家</th><th>地区</th><th>平台</th><th>结果</th><th>时长</th><th>目标</th><th>受伤量</th><th>余HP</th><th>模式</th><th>时间</th></tr>' +
         recent.map(g => `<tr>
-          <td style="font-family:monospace;font-size:11px;color:#94a3b8;">${(g.player_id || '').slice(0,8)}</td>
+          <td style="max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${g.player_id || ''}">${fmtPlayer(g)}</td>
           <td style="color:#94a3b8;font-size:11px;">${[g.city, g.region, g.country].filter(Boolean).join(', ') || '-'}</td>
           <td style="color:#64748b;font-size:11px;">${g.platform || '-'}</td>
           <td><span class="badge ${g.result === 'victory' ? 'badge-ok' : 'badge-err'}">${g.result === 'victory' ? '胜利' : '失败'}</span></td>
@@ -280,7 +285,7 @@ async function refreshGames() {
       function fmtLoc(g) { return [g.city, g.region, g.country].filter(Boolean).join(', ') || '-'; }
       document.getElementById('games-table').innerHTML = '<table style="table-layout:fixed;"><tr><th>玩家</th><th>地区</th><th>平台</th><th>新</th><th>结果</th><th>时长</th><th>目标</th><th>击杀</th><th>受伤量</th><th>余HP</th><th>金币</th><th>难度</th><th>帧率</th><th>法宝</th><th>模式</th><th>时间</th></tr>' +
         data.map(g => `<tr>
-          <td style="font-family:monospace;font-size:11px;color:#94a3b8;">${(g.player_id || '').slice(0,8)}</td>
+          <td style="max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${g.player_id || ''}">${fmtPlayer(g)}</td>
           <td style="color:#94a3b8;font-size:11px;">${fmtLoc(g)}</td>
           <td style="color:#64748b;font-size:11px;">${g.platform || '-'}</td>
           <td style="color:${g.is_new_player ? '#fbbf24' : '#64748b'};font-size:11px;">${g.is_new_player ? '新' : '-'}</td>
@@ -459,7 +464,7 @@ function filterPlayers() {
       '<th>最后上线</th>' +
     '</tr>' +
     filtered.map(p => '<tr>' +
-      '<td style="max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + (p.player_id || '') + '">' + (p.nickname || '<span style="color:#475569;font-family:monospace;font-size:11px;">' + (p.player_id || '').slice(0, 8) + '</span>') + '</td>' +
+      '<td style="max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + (p.player_id || '') + '">' + fmtPlayer(p) + '</td>' +
       '<td style="font-size:12px;color:#94a3b8;white-space:nowrap;">' + fmtLoc(p) + '</td>' +
       '<td style="font-size:12px;color:#64748b;white-space:nowrap;">' + (p.platform || '-') + '</td>' +
       '<td>' + (p.games_played || 0) + '</td>' +
