@@ -459,7 +459,7 @@ function filterPlayers() {
       '<th>最后上线</th>' +
     '</tr>' +
     filtered.map(p => '<tr>' +
-      '<td style="font-family:monospace;font-size:11px;color:#94a3b8;max-width:120px;overflow:hidden;text-overflow:ellipsis;" title="' + (p.player_id || '') + '">' + (p.player_id || '').slice(0, 8) + '</td>' +
+      '<td style="max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + (p.player_id || '') + '">' + (p.nickname || '<span style="color:#475569;font-family:monospace;font-size:11px;">' + (p.player_id || '').slice(0, 8) + '</span>') + '</td>' +
       '<td style="font-size:12px;color:#94a3b8;white-space:nowrap;">' + fmtLoc(p) + '</td>' +
       '<td style="font-size:12px;color:#64748b;white-space:nowrap;">' + (p.platform || '-') + '</td>' +
       '<td>' + (p.games_played || 0) + '</td>' +

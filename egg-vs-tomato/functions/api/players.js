@@ -7,6 +7,7 @@ export async function onRequest(context) {
   const { results } = await db.prepare(`
     SELECT
       p.player_id,
+      p.nickname,
       p.country, p.region, p.city,
       (SELECT MAX(ended_at) FROM online_session WHERE player_id = p.player_id) AS last_seen,
       (SELECT MIN(started_at) FROM online_session WHERE player_id = p.player_id) AS first_seen,
