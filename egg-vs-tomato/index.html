@@ -2015,6 +2015,32 @@ const HLRecorder = {
   },
 };
 
+function sha256(str) {
+  const chrsz = 8, hexcase = 0;
+  function safe_add(x, y) { const lsw = (x & 0xFFFF) + (y & 0xFFFF); return (x >> 16) + (y >> 16) + (lsw >> 16) << 16 | lsw & 0xFFFF; }
+  function S(X, n) { return X >>> n | X << (32 - n); }
+  function R(X, n) { return X >>> n; }
+  function Ch(x, y, z) { return x & y ^ ~x & z; }
+  function Maj(x, y, z) { return x & y ^ x & z ^ y & z; }
+  function Sigma0(x) { return S(x, 2) ^ S(x, 13) ^ S(x, 22); }
+  function Sigma1(x) { return S(x, 6) ^ S(x, 11) ^ S(x, 25); }
+  function Gamma0(x) { return S(x, 7) ^ S(x, 18) ^ R(x, 3); }
+  function Gamma1(x) { return S(x, 17) ^ S(x, 19) ^ R(x, 10); }
+  function core(l, i) { const K = [0x428A2F98,0x71374491,0xB5C0FBCF,0xE9B5DBA5,0x3956C25B,0x59F111F1,0x923F82A4,0xAB1C5ED5,0xD807AA98,0x12835B01,0x243185BE,0x550C7DC3,0x72BE5D74,0x80DEB1FE,0x9BDC06A7,0xC19BF174,0xE49B69C1,0xEFBE4786,0x0FC19DC6,0x240CA1CC,0x2DE92C6F,0x4A7484AA,0x5CB0A9DC,0x76F988DA,0x983E5152,0xA831C66D,0xB00327C8,0xBF597FC7,0xC6E00BF3,0xD5A79147,0x06CA6351,0x14292967,0x27B70A85,0x2E1B2138,0x4D2C6DFC,0x53380D13,0x650A7354,0x766A0ABB,0x81C2C92E,0x92722C85,0xA2BFE8A1,0xA81A664B,0xC24B8B70,0xC76C51A3,0xD192E819,0xD6990624,0xF40E3585,0x106AA070,0x19A4C116,0x1E376C08,0x2748774C,0x34B0BCB5,0x391C0CB3,0x4ED8AA4A,0x5B9CCA4F,0x682E6FF3,0x748F82EE,0x78A5636F,0x84C87814,0x8CC70208,0x90BEFFFA,0xA4506CEB,0xBEF9A3F7,0xC67178F2]; const H = [0x6A09E667,0xBB67AE85,0x3C6EF372,0xA54FF53A,0x510E527F,0x9B05688C,0x1F83D9AB,0x5BE0CD19]; const W = []; let a, b, c, d, e, f, g, h, T1, T2, m = l; while (i-- > 16) { W[i] = 0; }; for (i = 0; i < m.length * chrsz; i += chrsz) { W[i >> 5] |= (m.charCodeAt(i / chrsz) & 0xFF) << (24 - i % 32); }; W[i >> 5] |= 0x80 << (24 - i % 32); W[((i + 64 >> 9) << 4) + 15] = i; for (let j = 0; j < W.length; j += 16) { a = H[0]; b = H[1]; c = H[2]; d = H[3]; e = H[4]; f = H[5]; g = H[6]; h = H[7]; for (let k = 0; k < 64; k++) { if (k >= 16) { W[k] = safe_add(safe_add(safe_add(Gamma1(W[k - 2]), W[k - 7]), Gamma0(W[k - 15])), W[k - 16]); }; T1 = safe_add(safe_add(safe_add(safe_add(h, Sigma1(e)), Ch(e, f, g)), K[k]), W[k]); T2 = safe_add(Sigma0(a), Maj(a, b, c)); h = g; g = f; f = e; e = safe_add(d, T1); d = c; c = b; b = a; a = safe_add(T1, T2); }; H[0] = safe_add(a, H[0]); H[1] = safe_add(b, H[1]); H[2] = safe_add(c, H[2]); H[3] = safe_add(d, H[3]); H[4] = safe_add(e, H[4]); H[5] = safe_add(f, H[5]); H[6] = safe_add(g, H[6]); H[7] = safe_add(h, H[7]); }; return H.map(v => (hexcase ? v : (v >>> 0)).toString(16).padStart(8, '0')).join('');
+  }
+  const block = Math.ceil(str.length * chrsz / 32) + 2;
+  return core(str, block);
+}
+
+async function hashPassword(pw) {
+  if (crypto.subtle) {
+    const buf = new TextEncoder().encode(pw);
+    const digest = await crypto.subtle.digest('SHA-256', buf);
+    return Array.from(new Uint8Array(digest)).map(b => b.toString(16).padStart(2, '0')).join('');
+  }
+  return sha256(pw);
+}
+
 class Game {
   constructor() {
     this.egg = new Egg();
@@ -2030,6 +2056,9 @@ class Game {
     this.showNicknameEdit = false;
     this.nicknameText = '';
     this._nicknameInputEl = null;
+    this.showLoginDialog = false;
+    this._loginInputEl = null;
+    this._loginPwEl = null;
     this.spawnTimer = 0;
     this.survivalTime = 0;
     this.bestTime = 0;
@@ -2196,6 +2225,9 @@ class Game {
     this.loadFromServer();
     this.loadSettings();
     this.currentSkin = this.skinPoints >= 1000 ? '溏心蛋' : this.skinPoints >= 500 ? '煎荷包蛋' : this.skinPoints >= 100 ? '茶叶蛋' : '普通蛋';
+    this._accountVerified = null;
+    this._verifyAccount();
+    this._autoLogin();
   }
 
   drawPillText(text, x, y, { bg, fg, size, radius, padX, padY, align, bold } = {}) {
@@ -2431,6 +2463,7 @@ class Game {
 
   saveProgress() {
     const data = {
+      player_id: localStorage.getItem('hb_pid') || '',
       nickname: localStorage.getItem('egg_nickname') || '',
       unlockedSkins: this.unlockedSkins,
       currentSkin: this.currentSkin,
@@ -2457,7 +2490,8 @@ class Game {
   }
 
   loadFromServer() {
-    fetch('/api/load').then(r => r.json()).then(d => {
+    const pid = localStorage.getItem('hb_pid') || '';
+    fetch('/api/load?player_id=' + encodeURIComponent(pid)).then(r => r.json()).then(d => {
       if (!d || !d.skinPoints) return;
       this.skinPoints = d.skinPoints || 0;
       this.unlockedSkins = d.unlockedSkins || ['普通蛋'];
@@ -2477,8 +2511,9 @@ class Game {
       // Also persist to localStorage so it's available offline
       try { localStorage.setItem('egg_defense', JSON.stringify(d)); } catch(e) {}
       if (d.nickname) {
-        localStorage.setItem('egg_nickname', d.nickname);
-        localStorage.setItem('egg_nickname_set', '1');
+        if (!localStorage.getItem('egg_nickname_set')) {
+          localStorage.setItem('egg_nickname', d.nickname);
+        }
         this.nicknameText = d.nickname;
         if (this._nicknameInputEl) this._nicknameInputEl.value = d.nickname;
       }
@@ -3363,11 +3398,8 @@ class Game {
 
   update(dt) {
     if (this.state === 'victory') { this.updateVictory(dt); this._updateParticles(); return; }
-    if (this.state !== 'playing') return;
-
-
     if (this.messageTimer > 0) this.messageTimer--;
-    // Tip queue processing
+    if (this.state !== 'playing') return;
     if (this.tipQueue.length > 0) {
       if (this.tipTimer > 0) {
         this.tipTimer--;
@@ -4161,9 +4193,23 @@ class Game {
     this._bgDirty = false;
   }
 
+  drawMessage() {
+    if (this.messageTimer > 0) {
+      ctx.fillStyle = this.goalReached ? '#ffd700' : '#ff8a65';
+      ctx.font = `bold ${SIZE * .07}px Arial`;
+      ctx.textAlign = 'center';
+      ctx.globalAlpha = Math.min(1, this.messageTimer / 20);
+      const msgLines = wrapText(ctx, this.message, CW - PLATE_MARGIN * 2);
+      msgLines.forEach((line, i) => {
+        ctx.fillText(line, CX, SIZE * .30 + i * SIZE * .08);
+      });
+      ctx.globalAlpha = 1;
+    }
+  }
+
   draw() {
     ctx.clearRect(0, 0, CW, CH);
-    if (this.state === 'menu') { this.drawMenu(); this.drawTransitionOverlay(); if (this.showHighlightGallery) this.drawHighlightGallery(); if (this.showLeaderboard) this.drawLeaderboard(); if (this.showNicknameEdit) this.drawNicknameDialog(); return; }
+    if (this.state === 'menu') { this.drawMenu(); this.drawTransitionOverlay(); if (this.showHighlightGallery) this.drawHighlightGallery(); if (this.showLeaderboard) this.drawLeaderboard(); if (this.showNicknameEdit) this.drawNicknameDialog(); if (this.showLoginDialog) this.drawLoginDialog(); return; }
     if (this.state === 'gameover') { this.drawGameOver(); this.drawTransitionOverlay(); if (this.showHighlightGallery) this.drawHighlightGallery(); return; }
     if (this.state === 'victoryscreen') { this.drawVictoryScreen(); this.drawTransitionOverlay(); if (this.showHighlightGallery) this.drawHighlightGallery(); return; }
     if (this.state === 'shop' || this.state === 'preshop') { this.drawShopField(); this.drawShop(); this.drawTransitionOverlay(); if (this.showTutorial) this.drawTutorial(); return; }
@@ -4834,17 +4880,7 @@ class Game {
       }
     }
 
-    if (this.messageTimer > 0) {
-      ctx.fillStyle = this.goalReached ? '#ffd700' : '#ff8a65';
-      ctx.font = `bold ${SIZE * .07}px Arial`;
-      ctx.textAlign = 'center';
-      ctx.globalAlpha = Math.min(1, this.messageTimer / 20);
-      const msgLines = wrapText(ctx, this.message, CW - PLATE_MARGIN * 2);
-      msgLines.forEach((line, i) => {
-        ctx.fillText(line, CX, SIZE * .30 + i * SIZE * .08);
-      });
-      ctx.globalAlpha = 1;
-    }
+    this.drawMessage();
 
     // Tip messages (tutorial)
     if (this.tipQueue.length > 0 && this.tipTimer > 0) {
@@ -5035,6 +5071,17 @@ class Game {
     ctx.textBaseline = 'middle';
     ctx.textAlign = 'left';
     ctx.fillText('🐣 ' + this.nicknameText + '  ✏️', CX + SIZE * .02, skinY);
+    // Account status / login link
+    const hasAccount = this._accountVerified === true;
+    if (hasAccount) {
+      ctx.fillStyle = '#aabb99';
+      ctx.font = `${SIZE * .02}px Arial`;
+      ctx.fillText('✓ 已登录', CX + SIZE * .02, skinY + SIZE * .035);
+    } else {
+      ctx.fillStyle = '#cc9966';
+      ctx.font = `${SIZE * .02}px Arial`;
+      ctx.fillText('⚡ 未登录', CX + SIZE * .02, skinY + SIZE * .035);
+    }
     ctx.textAlign = 'center';
     ctx.textBaseline = 'alphabetic';
 
@@ -6252,19 +6299,12 @@ class Game {
         ctx.fillText('—', lx + lw / 2, ry);
       }
     }
-    // Close button
-    const btnY = ly + lh - SIZE * .09;
-    const btnH = SIZE * .05;
-    const btnW = SIZE * .20;
-    ctx.fillStyle = '#e2e8f0';
-    ctx.beginPath();
-    ctx.roundRect(CX - btnW / 2, btnY, btnW, btnH, 8);
-    ctx.fill();
-    ctx.fillStyle = '#64748b';
-    ctx.font = `bold ${SIZE * .026}px Arial`;
+    // Close X
+    ctx.fillStyle = '#94a3b8';
+    ctx.font = `bold ${SIZE * .035}px Arial`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText('关闭', CX, btnY + btnH / 2);
+    ctx.fillText('✕', lx + lw - SIZE * .04, ly + SIZE * .04);
   }
 
   _openNicknameDialog() {
@@ -6276,31 +6316,65 @@ class Game {
 
   _createNicknameInput() {
     this._removeNicknameInput();
-    const lw = SIZE * .8, lh = SIZE * .44;
+    const lw = SIZE * .8, lh = SIZE * .50;
     const lx = CX - lw / 2, ly = CY - lh / 2;
-    const fieldY = ly + SIZE * .23;
+    const gap = SIZE * .04;
     const fieldH = SIZE * .055;
-    const fieldW = lw * .7;
-    const fieldX = CX - fieldW / 2;
+    const labelW = SIZE * .12;
+    const fieldX = lx + gap + labelW;
+    const fieldW = lx + lw - gap - fieldX;
     const rect = canvas.getBoundingClientRect();
-    const sx = rect.left + (fieldX / CW) * rect.width;
-    const sy = rect.top + (fieldY / CH) * rect.height;
     const sw = (fieldW / CW) * rect.width;
     const sh = (fieldH / CH) * rect.height;
+    const nickBoxTop = ly + SIZE * .1725;
+    const pwBoxTop = ly + SIZE * .265;
+    const snx = rect.left + (fieldX / CW) * rect.width;
+    // Nickname input
+    const sny = rect.top + (nickBoxTop / CH) * rect.height;
     const input = document.createElement('input');
     input.type = 'text';
-    input.maxLength = 12;
+    input.maxLength = 20;
     input.value = this.nicknameText;
-    input.style.cssText = `position:fixed;left:${sx}px;top:${sy}px;width:${sw}px;height:${sh}px;border:2px solid #ffb174;border-radius:8px;padding:0 10px;font:16px Arial;outline:none;background:#fff;z-index:1000;box-sizing:border-box;`;
+    input.style.cssText = `position:fixed;left:${snx}px;top:${sny}px;width:${sw}px;height:${sh}px;border:2px solid #ffb174;border-radius:8px;padding:0 10px;font:16px Arial;outline:none;background:#fff;z-index:1000;box-sizing:border-box;`;
     input.addEventListener('input', () => { this.nicknameText = input.value; });
     input.addEventListener('keydown', e => {
-      if (e.key === 'Enter') { this._confirmNickname(); }
       if (e.key === 'Escape') { this._cancelNickname(); }
     });
     document.body.appendChild(input);
     this._nicknameInputEl = input;
+    // Password input
+    const spy = rect.top + (pwBoxTop / CH) * rect.height;
+    const pwInput = document.createElement('input');
+    pwInput.type = 'password';
+    pwInput.maxLength = 20;
+    pwInput.value = localStorage.getItem('egg_password') || '';
+    pwInput.placeholder = '输入密码（最少4位）';
+    pwInput.style.cssText = `position:fixed;left:${snx}px;top:${spy}px;width:${sw}px;height:${sh}px;border:2px solid #ffb174;border-radius:8px;padding:0 44px 0 10px;font:16px Arial;outline:none;background:#fff;z-index:1000;box-sizing:border-box;`;
+    pwInput.addEventListener('keydown', e => {
+      if (e.key === 'Escape') { this._cancelNickname(); }
+    });
+    document.body.appendChild(pwInput);
+    this._nicknamePwEl = pwInput;
+    this._nicknamePwToggle = this._createPwToggle(pwInput, snx, sw, spy, sh);
     input.focus();
     input.select();
+  }
+
+  _createPwToggle(inputEl, left, width, top, height) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="#94a3b8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>`;
+    btn.style.cssText = `position:fixed;left:${left + width - 42}px;top:${top}px;width:30px;height:${height}px;display:flex;align-items:center;justify-content:center;cursor:pointer;z-index:1001;background:transparent;border:none;padding:0;`;
+    btn.addEventListener('click', e => {
+      e.preventDefault();
+      const isPw = inputEl.type === 'password';
+      inputEl.type = isPw ? 'text' : 'password';
+      btn.innerHTML = isPw
+        ? `<svg viewBox="0 0 24 24" fill="none" stroke="#94a3b8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/><line x1="1" y1="1" x2="23" y2="23"/></svg>`
+        : `<svg viewBox="0 0 24 24" fill="none" stroke="#94a3b8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>`;
+    });
+    document.body.appendChild(btn);
+    return btn;
   }
 
   _removeNicknameInput() {
@@ -6308,19 +6382,134 @@ class Game {
       this._nicknameInputEl.remove();
       this._nicknameInputEl = null;
     }
+    if (this._nicknamePwEl) {
+      this._nicknamePwEl.remove();
+      this._nicknamePwEl = null;
+    }
+    if (this._nicknamePwToggle) {
+      this._nicknamePwToggle.remove();
+      this._nicknamePwToggle = null;
+    }
   }
 
-  _confirmNickname() {
+  async _verifyAccount() {
+    try {
+      const pid = localStorage.getItem('hb_pid');
+      if (!pid) { this._accountVerified = false; return; }
+      const r = await fetch('/api/check-account', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ player_id: pid })
+      });
+      const d = await r.json();
+      if (d.ok && d.hasAccount) {
+        localStorage.setItem('egg_nickname_set', '1');
+        if (d.nickname) {
+          localStorage.setItem('egg_nickname', d.nickname);
+          this.nicknameText = d.nickname;
+        }
+        this._accountVerified = true;
+      } else {
+        localStorage.removeItem('egg_nickname_set');
+        this._accountVerified = false;
+      }
+    } catch(e) {
+      this._accountVerified = null;
+    }
+  }
+
+  async _autoLogin() {
+    const name = localStorage.getItem('egg_nickname');
+    const pw = localStorage.getItem('egg_password');
+    if (!name || !pw) return;
+    const pwHash = await hashPassword(pw);
+    try {
+      const r = await fetch('/api/login', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ nickname: name, password_hash: pwHash })
+      });
+      const d = await r.json();
+      if (d.ok) {
+        localStorage.setItem('hb_pid', d.player_id);
+        localStorage.setItem('egg_nickname_set', '1');
+        this.nicknameText = name;
+        this._accountVerified = true;
+        this.saveProgress();
+        this.draw();
+      }
+    } catch(e) {
+      // auto-login failed silently
+    }
+  }
+
+  async _registerNickname() {
     const name = this.nicknameText.trim();
-    if (name) {
-      this.nicknameText = name;
+    const pw = this._nicknamePwEl ? this._nicknamePwEl.value : '';
+    if (!name) { this.showMessage('请输入昵称', 120); return; }
+    if (pw.length < 4) { this.showMessage('密码至少4位', 120); return; }
+    const pwHash = await hashPassword(pw);
+    try {
+      const r = await fetch('/api/register', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ nickname: name, password_hash: pwHash })
+      });
+      const d = await r.json();
+      if (!d.ok) {
+        if (r.status === 409) {
+          this.showMessage('该昵称已被注册，请登录', 180);
+        } else {
+          this.showMessage(d.error || '注册失败', 120);
+        }
+        return;
+      }
+      localStorage.setItem('hb_pid', d.player_id);
       localStorage.setItem('egg_nickname', name);
       localStorage.setItem('egg_nickname_set', '1');
+      localStorage.setItem('egg_password', pw);
+      this.nicknameText = name;
       this.saveProgress();
+      this._removeNicknameInput();
+      this.showNicknameEdit = false;
+      this.showMessage('注册成功！', 80);
+      this._accountVerified = true;
+      this.draw();
+    } catch(e) {
+      this.showMessage('网络错误，无法连接服务器', 120);
     }
-    this._removeNicknameInput();
-    this.showNicknameEdit = false;
-    this.draw();
+  }
+
+  async _loginNickname() {
+    const name = this.nicknameText.trim();
+    const pw = this._nicknamePwEl ? this._nicknamePwEl.value : '';
+    console.log('[login] name:', name, 'pw len:', pw.length);
+    if (!name || !pw) { this.showMessage('请输入昵称和密码', 120); return; }
+    const pwHash = await hashPassword(pw);
+    console.log('[login] pwHash:', pwHash.slice(0, 16) + '...');
+    try {
+      const r = await fetch('/api/login', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ nickname: name, password_hash: pwHash })
+      });
+      console.log('[login] response status:', r.status);
+      const d = await r.json();
+      console.log('[login] response body:', d);
+      if (!d.ok) {
+        this.showMessage(d.error || '登录失败', 120);
+        return;
+      }
+      localStorage.setItem('hb_pid', d.player_id);
+      localStorage.setItem('egg_nickname', name);
+      localStorage.setItem('egg_nickname_set', '1');
+      localStorage.setItem('egg_password', pw);
+      this.nicknameText = name;
+      this._accountVerified = true;
+      this.saveProgress();
+      this._removeNicknameInput();
+      this.showNicknameEdit = false;
+      this.showMessage('登录成功！', 80);
+      this.draw();
+    } catch(e) {
+      this.showMessage('网络错误，无法连接服务器', 120);
+    }
   }
 
   _cancelNickname() {
@@ -6332,7 +6521,7 @@ class Game {
   drawNicknameDialog() {
     ctx.fillStyle = 'rgba(0,0,0,.45)';
     ctx.fillRect(0, 0, CW, CH);
-    const lw = SIZE * .8, lh = SIZE * .44;
+    const lw = SIZE * .8, lh = SIZE * .50;
     const lx = CX - lw / 2, ly = CY - lh / 2;
     ctx.save();
     ctx.shadowColor = 'rgba(0,0,0,.4)';
@@ -6348,56 +6537,262 @@ class Game {
     ctx.font = `bold ${SIZE * .05}px Arial`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText('✏️ 设置昵称', CX, ly + SIZE * .09);
-    // Input label and field
+    ctx.fillText('✏️ 设置昵称', CX, ly + SIZE * .07);
+    const gap = SIZE * .04;
+    const fieldH = SIZE * .055;
+    const labelW = SIZE * .12;
+    const fieldX = lx + gap + labelW;
+    const fieldW = lx + lw - gap - fieldX;
+    const nickBoxTop = ly + SIZE * .1725;
+    const pwBoxTop = ly + SIZE * .265;
+    // Row 1: Nickname
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
     ctx.fillStyle = '#94a3b8';
     ctx.font = `${SIZE * .024}px Arial`;
-    ctx.fillText('🐣 昵称', CX, ly + SIZE * .18);
-    const fieldY = ly + SIZE * .23;
-    const fieldH = SIZE * .055;
-    const fieldW = lw * .7;
-    const fieldX = CX - fieldW / 2;
+    ctx.fillText('🐣 昵称', lx + gap, nickBoxTop + fieldH / 2);
     ctx.fillStyle = '#f8fafc';
     ctx.beginPath();
-    ctx.roundRect(fieldX, fieldY, fieldW, fieldH, 8);
+    ctx.roundRect(fieldX, nickBoxTop, fieldW, fieldH, 8);
     ctx.fill();
     ctx.strokeStyle = '#e2e8f0';
     ctx.lineWidth = 1.5;
     ctx.beginPath();
-    ctx.roundRect(fieldX, fieldY, fieldW, fieldH, 8);
+    ctx.roundRect(fieldX, nickBoxTop, fieldW, fieldH, 8);
     ctx.stroke();
-    // Input hint text (if empty)
     if (!this.nicknameText) {
       ctx.fillStyle = '#cbd5e1';
       ctx.font = `${SIZE * .024}px Arial`;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.fillText('输入昵称（最多12字）', CX, fieldY + fieldH / 2);
+      ctx.fillText('输入昵称（最多12字）', fieldX + fieldW / 2, nickBoxTop + fieldH / 2);
     }
-    // Buttons
+    // Row 2: Password
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#94a3b8';
+    ctx.font = `${SIZE * .024}px Arial`;
+    ctx.fillText('🔒 密码', lx + gap, pwBoxTop + fieldH / 2);
+    ctx.fillStyle = '#f8fafc';
+    ctx.beginPath();
+    ctx.roundRect(fieldX, pwBoxTop, fieldW, fieldH, 8);
+    ctx.fill();
+    ctx.strokeStyle = '#e2e8f0';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.roundRect(fieldX, pwBoxTop, fieldW, fieldH, 8);
+    ctx.stroke();
+    ctx.fillStyle = '#cbd5e1';
+    ctx.font = `${SIZE * .024}px Arial`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('••••••••', fieldX + fieldW / 2, pwBoxTop + fieldH / 2);
+    // Error message
     const btnY = ly + lh - SIZE * .11;
+    if (this.messageTimer > 0 && this.message) {
+      ctx.fillStyle = '#c62828';
+      ctx.font = `${SIZE * .024}px Arial`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(this.message, CX, btnY - SIZE * .035);
+    }
     const btnH2 = SIZE * .05;
     const btnW2 = SIZE * .22;
-    const gap = SIZE * .06;
-    const cancelX = CX - btnW2 - gap / 2;
-    const confirmX = CX + gap / 2;
-    // Cancel
-    ctx.fillStyle = '#e2e8f0';
+    const btnGap = SIZE * .06;
+    const regX = CX - btnW2 - btnGap / 2;
+    const loginX = CX + btnGap / 2;
+    // Register button
+    ctx.fillStyle = '#81c784';
     ctx.beginPath();
-    ctx.roundRect(cancelX, btnY, btnW2, btnH2, 8);
+    ctx.roundRect(regX, btnY, btnW2, btnH2, 8);
     ctx.fill();
-    ctx.fillStyle = '#64748b';
+    ctx.fillStyle = '#fff';
     ctx.font = `bold ${SIZE * .026}px Arial`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText('取消', cancelX + btnW2 / 2, btnY + btnH2 / 2);
-    // Confirm
-    ctx.fillStyle = '#81c784';
+    ctx.fillText('注册', regX + btnW2 / 2, btnY + btnH2 / 2);
+    // Login button
+    ctx.fillStyle = '#64b5f6';
     ctx.beginPath();
-    ctx.roundRect(confirmX, btnY, btnW2, btnH2, 8);
+    ctx.roundRect(loginX, btnY, btnW2, btnH2, 8);
     ctx.fill();
     ctx.fillStyle = '#fff';
-    ctx.fillText('确认', confirmX + btnW2 / 2, btnY + btnH2 / 2);
+    ctx.fillText('登录', loginX + btnW2 / 2, btnY + btnH2 / 2);
+    // Close X
+    ctx.fillStyle = '#94a3b8';
+    ctx.font = `bold ${SIZE * .035}px Arial`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('✕', lx + lw - SIZE * .04, ly + SIZE * .04);
+  }
+
+  drawLoginDialog() {
+    ctx.fillStyle = 'rgba(0,0,0,.45)';
+    ctx.fillRect(0, 0, CW, CH);
+    const lw = SIZE * .8, lh = SIZE * .44;
+    const lx = CX - lw / 2, ly = CY - lh / 2;
+    ctx.save();
+    ctx.shadowColor = 'rgba(0,0,0,.4)';
+    ctx.shadowBlur = 40;
+    ctx.shadowOffsetY = 6;
+    ctx.fillStyle = '#fff';
+    ctx.beginPath();
+    ctx.roundRect(lx, ly, lw, lh, 18);
+    ctx.fill();
+    ctx.restore();
+    ctx.fillStyle = '#4a7c59';
+    ctx.font = `bold ${SIZE * .05}px Arial`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('🔐 登录账号', CX, ly + SIZE * .08);
+    // Nickname
+    ctx.fillStyle = '#94a3b8';
+    ctx.font = `${SIZE * .024}px Arial`;
+    ctx.fillText('🐣 昵称', CX, ly + SIZE * .17);
+    const fieldH = SIZE * .055;
+    const fieldW = lw * .7;
+    const fieldX = CX - fieldW / 2;
+    const nickY = ly + SIZE * .22;
+    ctx.fillStyle = '#f8fafc';
+    ctx.beginPath();
+    ctx.roundRect(fieldX, nickY, fieldW, fieldH, 8);
+    ctx.fill();
+    ctx.strokeStyle = '#e2e8f0';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.roundRect(fieldX, nickY, fieldW, fieldH, 8);
+    ctx.stroke();
+    // Password
+    ctx.fillStyle = '#94a3b8';
+    ctx.font = `${SIZE * .024}px Arial`;
+    ctx.fillText('🔒 密码', CX, ly + SIZE * .30);
+    const pwY = ly + SIZE * .35;
+    ctx.fillStyle = '#f8fafc';
+    ctx.beginPath();
+    ctx.roundRect(fieldX, pwY, fieldW, fieldH, 8);
+    ctx.fill();
+    ctx.strokeStyle = '#e2e8f0';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.roundRect(fieldX, pwY, fieldW, fieldH, 8);
+    ctx.stroke();
+    // Login button
+    const btnY = ly + lh - SIZE * .11;
+    const btnH2 = SIZE * .05;
+    const btnW2 = SIZE * .28;
+    const btnX = CX - btnW2 / 2;
+    ctx.fillStyle = '#64b5f6';
+    ctx.beginPath();
+    ctx.roundRect(btnX, btnY, btnW2, btnH2, 8);
+    ctx.fill();
+    ctx.fillStyle = '#fff';
+    ctx.font = `bold ${SIZE * .026}px Arial`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('登录', btnX + btnW2 / 2, btnY + btnH2 / 2);
+    // Error message
+    if (this.messageTimer > 0 && this.message) {
+      ctx.fillStyle = '#c62828';
+      ctx.font = `${SIZE * .024}px Arial`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(this.message, CX, btnY - SIZE * .035);
+    }
+    // Close X
+    ctx.fillStyle = '#94a3b8';
+    ctx.font = `bold ${SIZE * .035}px Arial`;
+    ctx.fillText('✕', lx + lw - SIZE * .04, ly + SIZE * .04);
+  }
+
+  _openLoginDialog() {
+    this.showLoginDialog = true;
+    this._loginNickname = '';
+    this._loginPassword = '';
+    this.draw();
+    setTimeout(() => this._createLoginInputs(), 50);
+  }
+
+  _createLoginInputs() {
+    this._removeLoginInputs();
+    const lw = SIZE * .8, lh = SIZE * .44;
+    const lx = CX - lw / 2, ly = CY - lh / 2;
+    const fieldH = SIZE * .055;
+    const fieldW = lw * .7;
+    const fieldX = CX - fieldW / 2;
+    const rect = canvas.getBoundingClientRect();
+    // Nickname input
+    const nickY = ly + SIZE * .22;
+    const snx = rect.left + (fieldX / CW) * rect.width;
+    const sny = rect.top + (nickY / CH) * rect.height;
+    const sw = (fieldW / CW) * rect.width;
+    const sh = (fieldH / CH) * rect.height;
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.maxLength = 20;
+    input.style.cssText = `position:fixed;left:${snx}px;top:${sny}px;width:${sw}px;height:${sh}px;border:2px solid #90caf9;border-radius:8px;padding:0 10px;font:16px Arial;outline:none;background:#fff;z-index:1000;box-sizing:border-box;`;
+    this._loginInputEl = input;
+    document.body.appendChild(input);
+    // Password input
+    const pwY = ly + SIZE * .35;
+    const spx = rect.left + (fieldX / CW) * rect.width;
+    const spy = rect.top + (pwY / CH) * rect.height;
+    const pwInput = document.createElement('input');
+    pwInput.type = 'password';
+    pwInput.maxLength = 20;
+    pwInput.value = localStorage.getItem('egg_password') || '';
+    pwInput.placeholder = '输入密码';
+    pwInput.style.cssText = `position:fixed;left:${spx}px;top:${spy}px;width:${sw}px;height:${sh}px;border:2px solid #90caf9;border-radius:8px;padding:0 44px 0 10px;font:16px Arial;outline:none;background:#fff;z-index:1000;box-sizing:border-box;`;
+    pwInput.addEventListener('keydown', e => {
+      if (e.key === 'Enter') { this._submitLogin(); }
+      if (e.key === 'Escape') { this._closeLoginDialog(); }
+    });
+    this._loginPwEl = pwInput;
+    document.body.appendChild(pwInput);
+    this._loginPwToggle = this._createPwToggle(pwInput, spx, sw, spy, sh);
+    input.focus();
+  }
+
+  _removeLoginInputs() {
+    if (this._loginInputEl) { this._loginInputEl.remove(); this._loginInputEl = null; }
+    if (this._loginPwEl) { this._loginPwEl.remove(); this._loginPwEl = null; }
+    if (this._loginPwToggle) { this._loginPwToggle.remove(); this._loginPwToggle = null; }
+  }
+
+  async _submitLogin() {
+    const name = this._loginInputEl ? this._loginInputEl.value.trim() : '';
+    const pw = this._loginPwEl ? this._loginPwEl.value : '';
+    if (!name || !pw) { this.showMessage('请输入昵称和密码', 120); return; }
+    const pwHash = await hashPassword(pw);
+    try {
+      const r = await fetch('/api/login', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ nickname: name, password_hash: pwHash })
+      });
+      const d = await r.json();
+      if (!d.ok) {
+        this.showMessage(d.error || '登录失败', 120);
+        return;
+      }
+      localStorage.setItem('hb_pid', d.player_id);
+      localStorage.setItem('egg_nickname', name);
+      localStorage.setItem('egg_nickname_set', '1');
+      localStorage.setItem('egg_password', pw);
+      this.nicknameText = name;
+      this._accountVerified = true;
+      this.saveProgress();
+      this._removeLoginInputs();
+      this.showLoginDialog = false;
+      this.showMessage('登录成功！', 80);
+      this.draw();
+    } catch(e) {
+      this.showMessage('网络错误，无法连接服务器', 120);
+    }
+  }
+
+  _closeLoginDialog() {
+    this._removeLoginInputs();
+    this.showLoginDialog = false;
+    this.draw();
   }
 
   drawCuteTomato(x, y, r) {
@@ -6590,11 +6985,11 @@ class Game {
     if (this.showLeaderboard) {
       const lw = SIZE * .82, lh = SIZE * .74;
       const lx = CX - lw / 2, ly = CY - lh / 2;
-      const btnY = ly + lh - SIZE * .09;
-      const btnH = SIZE * .05;
-      const btnW = SIZE * .20;
-      // Close button
-      if (x > CX - btnW / 2 && x < CX + btnW / 2 && y > btnY && y < btnY + btnH) {
+      // Close X
+      const xs = SIZE * .035;
+      const cx2 = lx + lw - SIZE * .04;
+      const cy2 = ly + SIZE * .04;
+      if (Math.abs(x - cx2) < xs && Math.abs(y - cy2) < xs) {
         this.showLeaderboard = false;
         this.draw();
         return;
@@ -6608,27 +7003,62 @@ class Game {
       return;
     }
     if (this.showNicknameEdit) {
-      const lw = SIZE * .8, lh = SIZE * .44;
+      const lw = SIZE * .8, lh = SIZE * .50;
       const lx = CX - lw / 2, ly = CY - lh / 2;
       const btnY = ly + lh - SIZE * .11;
       const btnH2 = SIZE * .05;
       const btnW2 = SIZE * .22;
       const gap = SIZE * .06;
-      const cancelX = CX - btnW2 - gap / 2;
-      const confirmX = CX + gap / 2;
-      // Confirm button
-      if (x > confirmX && x < confirmX + btnW2 && y > btnY && y < btnY + btnH2) {
-        this._confirmNickname();
+      const regX = CX - btnW2 - gap / 2;
+      const loginX = CX + gap / 2;
+      // Register button
+      if (x > regX && x < regX + btnW2 && y > btnY && y < btnY + btnH2) {
+        this._registerNickname();
         return;
       }
-      // Cancel button
-      if (x > cancelX && x < cancelX + btnW2 && y > btnY && y < btnY + btnH2) {
+      // Login button
+      if (x > loginX && x < loginX + btnW2 && y > btnY && y < btnY + btnH2) {
+        this._loginNickname();
+        return;
+      }
+      // Close X
+      const closeX = lx + lw - SIZE * .04;
+      const closeY = ly + SIZE * .04;
+      const closeS = SIZE * .03;
+      if (x > closeX - closeS && x < closeX + closeS && y > closeY - closeS && y < closeY + closeS) {
         this._cancelNickname();
         return;
       }
       // Outside card = cancel
       if (x < lx || x > lx + lw || y < ly || y > ly + lh) {
         this._cancelNickname();
+        return;
+      }
+      return;
+    }
+    if (this.showLoginDialog) {
+      const lw = SIZE * .8, lh = SIZE * .44;
+      const lx = CX - lw / 2, ly = CY - lh / 2;
+      const btnY = ly + lh - SIZE * .11;
+      const btnH2 = SIZE * .05;
+      const btnW2 = SIZE * .28;
+      const btnX = CX - btnW2 / 2;
+      // Login button
+      if (x > btnX && x < btnX + btnW2 && y > btnY && y < btnY + btnH2) {
+        this._submitLogin();
+        return;
+      }
+      // Close X
+      const closeX = lx + lw - SIZE * .04;
+      const closeY = ly + SIZE * .04;
+      const closeS = SIZE * .03;
+      if (x > closeX - closeS && x < closeX + closeS && y > closeY - closeS && y < closeY + closeS) {
+        this._closeLoginDialog();
+        return;
+      }
+      // Outside card = close
+      if (x < lx || x > lx + lw || y < ly || y > ly + lh) {
+        this._closeLoginDialog();
         return;
       }
       return;
@@ -6699,6 +7129,16 @@ class Game {
       if (y > nickY - nickH && y < nickY + nickH && x > CX + SIZE * .02 && x < CX + SIZE * .40) {
         this._openNicknameDialog();
         return;
+      }
+      // Login link (below nickname)
+      const hasAccount = localStorage.getItem('hb_pid') && localStorage.getItem('egg_nickname_set');
+      if (!hasAccount) {
+        const loginLinkY = nickY + SIZE * .035;
+        const loginLinkH = SIZE * .025;
+        if (y > loginLinkY - loginLinkH && y < loginLinkY + loginLinkH && x > CX + SIZE * .02 && x < CX + SIZE * .30) {
+          this._openLoginDialog();
+          return;
+        }
       }
       // Leaderboard button
       const leaderBtnY = modeBtnY + modeBtnH + SIZE * .025;
