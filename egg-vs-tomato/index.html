@@ -2485,7 +2485,7 @@ class Game {
       localStorage.setItem('egg_defense', JSON.stringify(data));
     } catch(e) {}
     try {
-      fetch('/api/save', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }).catch(() => {});
+      navigator.sendBeacon('/api/save', new Blob([JSON.stringify(data)], { type: 'application/json' }));
     } catch(e) {}
   }
 
@@ -2493,6 +2493,9 @@ class Game {
     const pid = localStorage.getItem('hb_pid') || '';
     fetch('/api/load?player_id=' + encodeURIComponent(pid)).then(r => r.json()).then(d => {
       if (!d || !d.skinPoints) return;
+      if (d.skinPoints > 0 || (d.gold || 0) > 0) {
+        try { localStorage.setItem('egghasPlayed', '1'); } catch(e) {}
+      }
       this.skinPoints = d.skinPoints || 0;
       this.unlockedSkins = d.unlockedSkins || ['普通蛋'];
     this.currentSkin = this.skinPoints >= 1000 ? '溏心蛋' : this.skinPoints >= 500 ? '煎荷包蛋' : this.skinPoints >= 100 ? '茶叶蛋' : '普通蛋';
@@ -5827,10 +5830,7 @@ class Game {
       const avg_fps = this._fpsSamples > 0 ? Math.round(this._fpsTotal / this._fpsSamples * 10) / 10 : 0;
       const is_new_player = this.totalGamesPlayed === 0 ? 1 : 0;
       const nickname = localStorage.getItem('egg_nickname') || '';
-      fetch('/api/game/end', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+      navigator.sendBeacon('/api/game/end', new Blob([JSON.stringify({
           player_id: pid,
           player_name: nickname,
           survival_seconds: Math.round(this.survivalTime),
@@ -5847,8 +5847,7 @@ class Game {
           avg_fps,
           is_new_player,
           artifacts: JSON.stringify(this._artifactCounts)
-        })
-      }).catch(() => {});
+        })], { type: 'application/json' }));
     } catch(e) {}
   }
 
@@ -7219,7 +7218,7 @@ class Game {
       const V = Math.max(SIZE, CH * .7);
       const btnW = SIZE * .4;
       if (x > CX - btnW / 2 && x < CX + btnW / 2 && y > CY + V * .10 && y < CY + V * .10 + SIZE * .08) {
-        this.setState('playing');
+        this.setState('menu');
       }
       if (x > CX - btnW / 2 && x < CX + btnW / 2 && y > CY + V * .23 && y < CY + V * .23 + SIZE * .07) {
         this.sharePoster();
@@ -7243,7 +7242,7 @@ class Game {
       const leftL = CX - btnW - btnGap / 2, leftR = CX - btnGap / 2;
       const rightL = CX + btnGap / 2, rightR = CX + btnW + btnGap / 2;
       if (x > leftL && x < leftR && y > btnY && y < btnY + btnH) {
-        this.setState('playing');
+        this.setState('menu');
       }
       if (x > rightL && x < rightR && y > btnY && y < btnY + btnH) {
         this.sharePoster();

@@ -73,7 +73,7 @@ tr:hover td { background:#334155; }
       <div class="section-title">地区分布（近 7 天）</div>
       <div style="display:flex;gap:16px;height:250px;">
         <div style="flex:1;min-width:0;"><canvas id="region-chart"></canvas></div>
-        <div id="region-legend" style="flex:0 0 auto;overflow-y:auto;font-size:11px;color:#94a3b8;line-height:2;user-select:text;padding-right:4px;"></div>
+        <div id="region-legend" style="font-size:11px;color:#94a3b8;line-height:2;user-select:text;padding-right:4px;"></div>
       </div>
     </div>
     <div class="card">
@@ -463,8 +463,8 @@ function filterPlayers() {
       '<th>平均存活</th>' +
       '<th>最佳存活</th>' +
       '<th>平均帧率</th>' +
-      '<th>首次上线</th>' +
       '<th>注册时间</th>' +
+      '<th>首次上线</th>' +
       '<th>最后上线</th>' +
     '</tr>' +
     filtered.map(p => '<tr>' +
@@ -480,8 +480,8 @@ function filterPlayers() {
       '<td style="white-space:nowrap;">' + (p.avg_survival != null ? Math.round(p.avg_survival) + 's' : '-') + '</td>' +
       '<td style="white-space:nowrap;">' + (p.best_survival != null ? Math.round(p.best_survival) + 's' : '-') + '</td>' +
       '<td>' + (p.avg_fps != null ? p.avg_fps : '-') + '</td>' +
-      '<td style="font-size:11px;color:#64748b;white-space:nowrap;">' + fmtDate(p.first_seen) + '</td>' +
       '<td style="font-size:11px;color:#64748b;white-space:nowrap;">' + fmtDate(p.created_at || p.first_seen) + '</td>' +
+      '<td style="font-size:11px;color:#64748b;white-space:nowrap;">' + fmtDate(p.first_seen) + '</td>' +
       '<td style="font-size:11px;color:#64748b;white-space:nowrap;">' + fmtDate(p.last_seen) + '</td>' +
     '</tr>').join('') + '</table>';
 
