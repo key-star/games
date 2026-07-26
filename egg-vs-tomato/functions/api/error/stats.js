@@ -1,5 +1,10 @@
+import { checkAdminToken } from '../_admin-guard.js';
+
 export async function onRequest(context) {
-  const { env } = context;
+  const { request, env } = context;
+  const unauthorized = checkAdminToken(request, env);
+  if (unauthorized) return unauthorized;
+
   const db = env.DB;
   const { results: topErrors } = await db.prepare(
     `SELECT message, COUNT(*) AS count

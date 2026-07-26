@@ -1,8 +1,13 @@
+import { checkAdminToken } from '../_admin-guard.js';
+
 export async function onRequest(context) {
   const { request, env } = context;
   const db = env.DB;
 
   if (request.method === 'DELETE') {
+    const unauthorized = checkAdminToken(request, env);
+    if (unauthorized) return unauthorized;
+
     const url = new URL(request.url);
     const id = url.searchParams.get('id');
     if (id) {

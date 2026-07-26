@@ -68,7 +68,7 @@ tr:hover td { background:#334155; }
     <div class="chart-wrap"><canvas id="trend-chart"></canvas></div>
   </div>
 
-  <div class="grid-2">
+  <div class="grid-2" style="grid-template-columns:1fr 3fr;">
     <div class="card">
       <div class="section-title">地区分布（近 7 天）</div>
       <div style="display:flex;gap:16px;height:250px;">
@@ -78,7 +78,7 @@ tr:hover td { background:#334155; }
     </div>
     <div class="card">
       <div class="section-title">最近对局</div>
-      <div id="recent-games"><div class="loading">加载中...</div></div>
+      <div id="recent-games" style="overflow-x:auto;"><div class="loading">加载中...</div></div>
     </div>
   </div>
 </div>
@@ -137,6 +137,7 @@ tr:hover td { background:#334155; }
 </div>
 
 <script>
+const ADMIN_TOKEN = 'aB8kQ2mN9xR4vY7wP3jF6cH1tL0sZ5eU';
 let chart = null, regionChart = null, errorChart = null;
 
 function formatTime(iso) {
@@ -157,7 +158,7 @@ function fmtMode(m) {
 
 function fmtPlayer(p) {
   if (p.nickname) return p.nickname;
-  return '<span style="color:#475569;font-family:monospace;font-size:11px;">' + (p.player_id || '').slice(0, 8) + '</span>';
+  return (p.player_id || '').slice(0, 8);
 }
 
 function buildRegionLegend(labels, data, colors) {
@@ -175,9 +176,9 @@ function buildRegionLegend(labels, data, colors) {
 async function refresh() {
   try {
     const [overviewRes, statsRes, recentRes] = await Promise.all([
-      fetch('/api/overview'),
-      fetch('/api/online/stats'),
-      fetch('/api/game/recent')
+      fetch('/api/overview', { headers: { 'X-Admin-Token': ADMIN_TOKEN } }),
+      fetch('/api/online/stats', { headers: { 'X-Admin-Token': ADMIN_TOKEN } }),
+      fetch('/api/game/recent', { headers: { 'X-Admin-Token': ADMIN_TOKEN } })
     ]);
     const overview = await overviewRes.json();
     const stats = await statsRes.json();
@@ -256,9 +257,10 @@ async function refresh() {
     }
 
     if (recent.length > 0) {
-      document.getElementById('recent-games').innerHTML = '<table><tr><th>玩家</th><th>地区</th><th>平台</th><th>结果</th><th>时长</th><th>目标</th><th>受伤量</th><th>余HP</th><th>模式</th><th>时间</th></tr>' +
+      document.getElementById('recent-games').innerHTML = '<table><tr><th>玩家</th><th>昵称</th><th>地区</th><th>平台</th><th>结果</th><th>时长</th><th>目标</th><th>受伤量</th><th>余HP</th><th>模式</th><th>时间</th></tr>' +
         recent.map(g => `<tr>
-          <td style="max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${g.player_id || ''}">${fmtPlayer(g)}</td>
+          <td style="max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${g.player_id || ''}">${fmtPlayer(g)}</td>
+          <td style="color:#94a3b8;font-size:11px;">${g.nickname || '-'}</td>
           <td style="color:#94a3b8;font-size:11px;">${[g.city, g.region, g.country].filter(Boolean).join(', ') || '-'}</td>
           <td style="color:#64748b;font-size:11px;">${g.platform || '-'}</td>
           <td><span class="badge ${g.result === 'victory' ? 'badge-ok' : 'badge-err'}">${g.result === 'victory' ? '胜利' : '失败'}</span></td>
@@ -279,13 +281,14 @@ async function refresh() {
 
 async function refreshGames() {
   try {
-    const res = await fetch('/api/game/recent?limit=100');
+    const res = await fetch('/api/game/recent?limit=100', { headers: { 'X-Admin-Token': ADMIN_TOKEN } });
     const data = await res.json();
     if (data.length > 0) {
       function fmtLoc(g) { return [g.city, g.region, g.country].filter(Boolean).join(', ') || '-'; }
-      document.getElementById('games-table').innerHTML = '<table style="table-layout:fixed;"><tr><th>玩家</th><th>地区</th><th>平台</th><th>新</th><th>结果</th><th>时长</th><th>目标</th><th>击杀</th><th>受伤量</th><th>余HP</th><th>金币</th><th>难度</th><th>帧率</th><th>法宝</th><th>模式</th><th>时间</th></tr>' +
+      document.getElementById('games-table').innerHTML = '<table style="table-layout:fixed;"><tr><th>玩家</th><th>昵称</th><th>地区</th><th>平台</th><th>新</th><th>结果</th><th>时长</th><th>目标</th><th>击杀</th><th>受伤量</th><th>余HP</th><th>金币</th><th>难度</th><th>帧率</th><th>法宝</th><th>模式</th><th>时间</th></tr>' +
         data.map(g => `<tr>
-          <td style="max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${g.player_id || ''}">${fmtPlayer(g)}</td>
+          <td style="max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${g.player_id || ''}">${fmtPlayer(g)}</td>
+          <td style="color:#94a3b8;font-size:11px;">${g.nickname || '-'}</td>
           <td style="color:#94a3b8;font-size:11px;">${fmtLoc(g)}</td>
           <td style="color:#64748b;font-size:11px;">${g.platform || '-'}</td>
           <td style="color:${g.is_new_player ? '#fbbf24' : '#64748b'};font-size:11px;">${g.is_new_player ? '新' : '-'}</td>
@@ -312,7 +315,7 @@ async function refreshGames() {
 
 async function refreshErrors() {
   try {
-    const res = await fetch('/api/error/stats');
+    const res = await fetch('/api/error/stats', { headers: { 'X-Admin-Token': ADMIN_TOKEN } });
     const data = await res.json();
     document.getElementById('e-total').textContent = data.total;
     document.getElementById('e-rate').textContent = data.crashRate;
@@ -376,13 +379,13 @@ async function refreshErrors() {
 
 async function clearErrors() {
   if (!confirm('确定清空所有错误记录？')) return;
-  await fetch('/api/error/log', { method: 'DELETE' });
+  await fetch('/api/error/log', { method: 'DELETE', headers: { 'X-Admin-Token': ADMIN_TOKEN } });
   refreshErrors();
 }
 
 async function deleteError(id) {
   if (!confirm('确定删除此错误记录？')) return;
-  await fetch('/api/error/log?id=' + id, { method: 'DELETE' });
+  await fetch('/api/error/log?id=' + id, { method: 'DELETE', headers: { 'X-Admin-Token': ADMIN_TOKEN } });
   refreshErrors();
 }
 
@@ -408,7 +411,7 @@ async function refreshPlayers() {
   if (!el) return;
   el.innerHTML = '<div class="loading">加载中...</div>';
   try {
-    const res = await fetch('/api/players?limit=500');
+    const res = await fetch('/api/players?limit=500', { headers: { 'X-Admin-Token': ADMIN_TOKEN } });
     const data = await res.json();
     _allPlayers = data || [];
     filterPlayers();
@@ -461,10 +464,11 @@ function filterPlayers() {
       '<th>最佳存活</th>' +
       '<th>平均帧率</th>' +
       '<th>首次上线</th>' +
+      '<th>注册时间</th>' +
       '<th>最后上线</th>' +
     '</tr>' +
     filtered.map(p => '<tr>' +
-      '<td style="max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + (p.player_id || '') + '">' + fmtPlayer(p) + '</td>' +
+      '<td style="max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + (p.player_id || '') + '">' + fmtPlayer(p) + '</td>' +
       '<td style="font-size:12px;color:#94a3b8;white-space:nowrap;">' + fmtLoc(p) + '</td>' +
       '<td style="font-size:12px;color:#64748b;white-space:nowrap;">' + (p.platform || '-') + '</td>' +
       '<td>' + (p.games_played || 0) + '</td>' +
@@ -476,6 +480,7 @@ function filterPlayers() {
       '<td style="white-space:nowrap;">' + (p.best_survival != null ? Math.round(p.best_survival) + 's' : '-') + '</td>' +
       '<td>' + (p.avg_fps != null ? p.avg_fps : '-') + '</td>' +
       '<td style="font-size:11px;color:#64748b;white-space:nowrap;">' + fmtDate(p.first_seen) + '</td>' +
+      '<td style="font-size:11px;color:#64748b;white-space:nowrap;">' + fmtDate(p.created_at || p.first_seen) + '</td>' +
       '<td style="font-size:11px;color:#64748b;white-space:nowrap;">' + fmtDate(p.last_seen) + '</td>' +
     '</tr>').join('') + '</table>';
 

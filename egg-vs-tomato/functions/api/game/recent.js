@@ -1,5 +1,10 @@
+import { checkAdminToken } from '../_admin-guard.js';
+
 export async function onRequest(context) {
   const { request, env } = context;
+  const unauthorized = checkAdminToken(request, env);
+  if (unauthorized) return unauthorized;
+
   const db = env.DB;
   const url = new URL(request.url);
   const limit = Math.min(parseInt(url.searchParams.get('limit')) || 20, 200);
