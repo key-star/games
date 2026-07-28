@@ -2079,13 +2079,13 @@ class Game {
     this.message = '';
     this.messageTimer = 0;
     this.artifacts = [];
-    this.artifactTimer = 200;
+    this.energy = 0;
     this._artifactCounts = { heal:0, shield:0, splash_range:0, splash_power:0, fire_shell:0, gravity:0, chain_lightning:0, repulse:0, tomato_apocalypse:0 };
     this.lastTime = performance.now();
     this.bonusHp = 0;
-    // Challenge goal
-    this.challengeGoal = 0;
-    this.challengeLabel = '';
+    // Challenge goal (updated after loadProgress)
+    this.challengeGoal = 60;
+    this.challengeLabel = '60秒';
     this.goalReached = false;
     this.victoryState = 'none';
     this.victoryTimer = 0;
@@ -2180,7 +2180,6 @@ class Game {
     this.hoverBtn = '';
     this.hpBarDisplay = 3;
     this.gameMode = 'challenge';
-    this.generateGoal();
         this.debugInfo = { fps: 0, dt: 0, frameCount: 0, fpsTimer: 0, showDebug: false, record: [], errors: [], audioLog: [] };
     this._fpsTotal = 0;
     this._fpsSamples = 0;
@@ -2222,6 +2221,8 @@ class Game {
     this.defaultUnit = UNIT;
 
     this.loadProgress();
+    this.challengeGoal = this.nextChallengeGoal;
+    this.challengeLabel = ({60:'小试牛刀',120:'渐入佳境',180:'硬核挑战',240:'百炼成钢',300:'终极考验',360:'出神入化',420:'登峰造极',480:'超凡入圣',540:'惊天动地',600:'传说级'})[this.nextChallengeGoal] || this.nextChallengeGoal + '秒';
     this.loadFromServer();
     this.loadSettings();
     this.currentSkin = this.skinPoints >= 1000 ? '溏心蛋' : this.skinPoints >= 500 ? '煎荷包蛋' : this.skinPoints >= 100 ? '茶叶蛋' : '普通蛋';
@@ -2445,6 +2446,7 @@ class Game {
       this.bonusHp = (this.achievements.includes('iron_wall') ? 1 : 0) + (this.achievements.includes('ten_games') ? 1 : 0) + (this.achievements.includes('max_skin') ? 1 : 0);
       this.gold = d.gold || 0;
       this.claimedMilestones = d.claimedMilestones || [];
+      this.nextChallengeGoal = d.nextChallengeGoal || 60;
     } catch(e) {}
   }
 
@@ -2479,7 +2481,8 @@ class Game {
       bonusHp: this.bonusHp,
       gold: this.gold,
       claimedMilestones: this.claimedMilestones,
-      survivalHistory: this.survivalHistory
+      survivalHistory: this.survivalHistory,
+      nextChallengeGoal: this.nextChallengeGoal,
     };
     try {
       localStorage.setItem('egg_defense', JSON.stringify(data));
@@ -2495,6 +2498,10 @@ class Game {
       if (!d || !d.skinPoints) return;
       if (d.skinPoints > 0 || (d.gold || 0) > 0) {
         try { localStorage.setItem('egghasPlayed', '1'); } catch(e) {}
+        // 服务端数据表明不是新玩家，关掉可能正在显示的教程
+        if (this.showTutorial) {
+          this.showTutorial = false;
+        }
       }
       this.skinPoints = d.skinPoints || 0;
       this.unlockedSkins = d.unlockedSkins || ['普通蛋'];
@@ -2511,6 +2518,7 @@ class Game {
       this.gold = d.gold || 0;
       this.claimedMilestones = d.claimedMilestones || [];
       this.survivalHistory = d.survivalHistory || [];
+      this.nextChallengeGoal = d.nextChallengeGoal || 60;
       // Also persist to localStorage so it's available offline
       try { localStorage.setItem('egg_defense', JSON.stringify(d)); } catch(e) {}
       if (d.nickname) {
@@ -2550,39 +2558,6 @@ class Game {
     return (skinHp[this.currentSkin] || 3) + this.bonusHp;
   }
 
-  generateGoal() {
-    const tiers = [
-      { goal: 60, label: '小试牛刀', base: 40 },
-      { goal: 120, label: '渐入佳境', base: 30 },
-      { goal: 180, label: '硬核挑战', base: 20 },
-      { goal: 300, label: '终极考验', base: 7 },
-      { goal: 600, label: '传说级', base: 3 },
-    ];
-    // Use dynamic weights if enough history
-    let weights = tiers.map(t => t.base);
-    if (this.survivalHistory.length >= 3) {
-      const hist = this.survivalHistory;
-      const n = hist.length;
-      weights = tiers.map((t, i) => {
-        const prevGoal = i > 0 ? tiers[i - 1].goal : 0;
-        // frequency of survival times in this tier's difficulty bucket
-        const bucketFreq = i === tiers.length - 1
-          ? hist.filter(v => v >= prevGoal).length / n
-          : hist.filter(v => v >= prevGoal && v < t.goal).length / n;
-        return t.base * 0.3 + bucketFreq * 100 * 0.7;
-      });
-    }
-    const total = weights.reduce((s, w) => s + w, 0);
-    let r = Math.random() * total;
-    let chosen = tiers[0];
-    for (let i = 0; i < tiers.length; i++) {
-      r -= weights[i];
-      if (r <= 0) { chosen = tiers[i]; break; }
-    }
-    this.challengeGoal = chosen.goal;
-    this.challengeLabel = chosen.label;
-  }
-
   startGame() {
     this._removeNicknameInput();
     // Reset joystick state
@@ -2593,8 +2568,8 @@ class Game {
     this.joystickKnobY = 0;
     this.joystickTouchId = null;
     if (this.gameMode === 'challenge') {
-      this.challengeGoal = 0;
-      this.generateGoal();
+      this.challengeGoal = this.nextChallengeGoal || 60;
+      this.challengeLabel = ({60:'小试牛刀',120:'渐入佳境',180:'硬核挑战',240:'百炼成钢',300:'终极考验',360:'出神入化',420:'登峰造极',480:'超凡入圣',540:'惊天动地',600:'传说级'})[this.challengeGoal] || this.challengeGoal + '秒';
     } else {
       this.challengeGoal = 0;
       this.challengeLabel = '';
@@ -2620,7 +2595,7 @@ class Game {
     this.state = 'preshop';
     this.isPreShop = true;
     this.artifacts = [];
-    this.artifactTimer = 300 + Math.floor(Math.random() * 200);
+    this.energy = 0;
     // Wave init
     this.wave = 1;
     if (this.gameMode === 'endless') {
@@ -3702,26 +3677,29 @@ class Game {
       if (this.goldPopups[i].timer <= 0) this.goldPopups.splice(i, 1);
     }
 
-    // === Artifacts ===
+    // === Artifacts (energy-based spawn) ===
     if (this.artifacts.length === 0) {
-      this.artifactTimer--;
-      if (this.artifactTimer <= 0) {
+      const distCenter = this.egg.pos.distTo(new Vec2(CX, CY));
+      this.energy = Math.min(100, this.energy + (distCenter <= UNIT * 0.3 ? 100 / (5 * 60) : 100 / (10 * 60)) * dt);
+
+      if (this.energy >= 100) {
         this.spawnArtifact();
       }
     }
+
     for (let i = this.artifacts.length - 1; i >= 0; i--) {
       const a = this.artifacts[i];
       a.life--;
       if (a.life <= 0) {
         this.artifacts.splice(i, 1);
-        this.artifactTimer = 300 + Math.floor(Math.random() * 200);
+        this.energy = 0;
         continue;
       }
       const d = Math.hypot(a.x - this.egg.pos.x, a.y - this.egg.pos.y);
       if (d < a.r + this.egg.r) {
         this.collectArtifact(a);
         this.artifacts.splice(i, 1);
-        this.artifactTimer = 300 + Math.floor(Math.random() * 200);
+        this.energy = 0;
       }
     }
 
@@ -4148,6 +4126,9 @@ class Game {
     this._reportGameEnd('victory');
     this.pushDebugData();
     HLRecorder.stop();
+    if (this.gameMode === 'challenge') {
+      this.nextChallengeGoal = Math.min(600, this.challengeGoal + 60);
+    }
     this.totalGamesPlayed++;
     this.totalSurvivalTime += this.survivalTime;
     if (this.survivalTime > this.bestTime) this.bestTime = this.survivalTime;
@@ -4244,6 +4225,23 @@ class Game {
       ctx.fillStyle = `rgba(255, 255, 255, ${(this.nearMissTimer - 20) / 40})`;
       ctx.fillRect(0, 0, CW, CH);
     }
+
+    // Center zone indicator
+    const centerR = UNIT * 0.3;
+    const pulse = Math.sin(Date.now() / 500) * 0.15 + 0.85;
+    ctx.save();
+    ctx.strokeStyle = `rgba(79,195,247,${0.15 * pulse})`;
+    ctx.lineWidth = 2;
+    ctx.setLineDash([6, 8]);
+    ctx.beginPath();
+    ctx.arc(CX, CY, centerR, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = `rgba(79,195,247,${0.03 * pulse})`;
+    ctx.beginPath();
+    ctx.arc(CX, CY, centerR, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
 
     for (let t of this.tomatoes) t.draw();
     const drawCharge = this.isCharging ? Math.min(1, Math.max(0, (Date.now() - this.chargeStartTime - 200) / 1800)) : 0;
@@ -4855,6 +4853,40 @@ class Game {
     this.drawPillText(skinLabel[this.egg.skin] || '普通蛋', CW - SIZE * .06, SIZE * .14,
       { bg: 'rgba(0,0,0,0)', fg: '#8aa899', size: SIZE * .025, align: 'right' });
 
+    // Energy bar
+    const barW = SIZE * .45, barH = 10, barX = CX - barW / 2, barY = CH - SIZE * .09;
+    const pct = this.energy / 100;
+    const inCenterZone = this.egg.pos.distTo(new Vec2(CX, CY)) <= UNIT * 0.3;
+    ctx.save();
+    ctx.shadowColor = 'rgba(0,0,0,.08)';
+    ctx.shadowBlur = 2;
+    ctx.fillStyle = 'rgba(0,0,0,.12)';
+    ctx.beginPath();
+    ctx.roundRect(barX, barY, barW, barH, 5);
+    ctx.fill();
+    const barColor = pct >= 1 ? '#ffd700' : inCenterZone ? '#4fc3f7' : '#90a4ae';
+    ctx.fillStyle = barColor;
+    ctx.globalAlpha = pct >= 1 ? 0.5 + Math.sin(Date.now() / 100) * 0.3 : 0.85;
+    ctx.beginPath();
+    ctx.roundRect(barX + 1, barY + 1, (barW - 2) * pct, barH - 2, 4);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+    ctx.shadowBlur = 0;
+    if (pct >= 1) {
+      const hasArtifact = this.artifacts.length > 0;
+      ctx.fillStyle = '#ffd700';
+      ctx.font = `bold ${SIZE * .022}px Arial`;
+      ctx.textAlign = 'center';
+      ctx.fillText(hasArtifact ? '✨ 法宝已出现' : '⚡ 法宝就绪', CX, barY - 4);
+    } else {
+      ctx.fillStyle = 'rgba(255,255,255,.5)';
+      ctx.font = `${SIZE * .016}px Arial`;
+      ctx.textAlign = 'center';
+      const zoneLabel = inCenterZone ? '中心区域·加速充能' : '';
+      if (zoneLabel) ctx.fillText(zoneLabel, CX, barY - 4);
+    }
+    ctx.restore();
+
     // Artifact backpack (王者荣耀装备栏风格)
     const bpY = CH - SIZE * .04;
     let bpX = CX;
@@ -5407,7 +5439,7 @@ class Game {
     const stX = CX - stTotalW / 2;
     const stY = cardY + cardH * .53;
     const stats = [
-      { icon: '🎯', label: '目标', value: `${this.challengeGoal || '-'}秒`, color: '#66bb6a', bg: 'rgba(102,187,106,.12)' },
+      { icon: '🎯', label: '目标', value: `${this.challengeLabel}`, color: '#66bb6a', bg: 'rgba(102,187,106,.12)' },
       { icon: '💀', label: '击杀', value: `${this.sessionKills}`, color: '#ef5350', bg: 'rgba(229,57,53,.08)' },
       { icon: '💰', label: '金币', value: `${this.gold}`, color: '#f0a500', bg: 'rgba(255,213,79,.15)' },
     ];
@@ -5855,6 +5887,9 @@ class Game {
     this._reportGameEnd('gameover');
     this.pushDebugData();
     HLRecorder.stop();
+    if (this.gameMode === 'challenge') {
+      this.nextChallengeGoal = Math.max(60, this.challengeGoal - 60);
+    }
     this.survivalHistory.push(Math.floor(this.survivalTime));
     if (this.survivalHistory.length > 50) this.survivalHistory.shift();
     this.state = 'gameover';
@@ -6433,6 +6468,7 @@ class Game {
         this.nicknameText = name;
         this._accountVerified = true;
         this.saveProgress();
+        this.loadFromServer();
         this.draw();
       }
     } catch(e) {
@@ -6502,6 +6538,7 @@ class Game {
       this.nicknameText = name;
       this._accountVerified = true;
       this.saveProgress();
+      this.loadFromServer();
       this._removeNicknameInput();
       this.showNicknameEdit = false;
       this.showMessage('登录成功！', 80);
@@ -7457,7 +7494,7 @@ class Game {
     const totalW = cardW * 3 + cardGap * 2;
     const startX = (PW - totalW) / 2;
     const stats = [
-      { icon: '🎯', label: '目标', value: `${this.challengeGoal || '-'}秒`, color: '#66bb6a', bg: 'rgba(102,187,106,.12)', border: 'rgba(102,187,106,.2)' },
+      { icon: '🎯', label: '目标', value: `${this.challengeLabel}`, color: '#66bb6a', bg: 'rgba(102,187,106,.12)', border: 'rgba(102,187,106,.2)' },
       { icon: '💀', label: '击杀', value: `${this.sessionKills}`, color: '#e53935', bg: 'rgba(229,57,53,.1)', border: 'rgba(229,57,53,.15)' },
       { icon: '💰', label: '金币', value: `${this.gold}`, color: '#f0a500', bg: 'rgba(255,213,79,.15)', border: 'rgba(255,160,0,.2)' },
     ];
