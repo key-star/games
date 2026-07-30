@@ -12,12 +12,6 @@ export async function onRequest(context) {
   const now = new Date();
   const nowISO = now.toISOString().replace('T', ' ').slice(0, 19);
 
-  // Check player exists
-  const player = await db.prepare('SELECT 1 FROM players WHERE player_id = ?').bind(player_id).first();
-  if (!player) {
-    return new Response('Player not found', { status: 200 });
-  }
-
   // Get latest session
   const lastSession = await db.prepare(
     'SELECT id, ended_at FROM online_session WHERE player_id = ? ORDER BY id DESC LIMIT 1'
@@ -30,20 +24,21 @@ export async function onRequest(context) {
     if (interval < 0) interval = 30;
   }
 
-  // Update players table (always)
+  // Upsert players table (create row for unregistered players too)
   await db.prepare(
-    `UPDATE players SET
-      total_online_seconds = total_online_seconds + ?1,
-      country = ?2, region = ?3, city = ?4, ip = ?5, platform = ?6
-    WHERE player_id = ?7`
+    `INSERT INTO players (player_id, total_online_seconds, country, region, city, ip, platform)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+     ON CONFLICT(player_id) DO UPDATE SET
+       total_online_seconds = total_online_seconds + ?2,
+       country = ?3, region = ?4, city = ?5, ip = ?6, platform = ?7`
   ).bind(
+    player_id,
     Math.min(interval, 120),
     request.cf?.country || null,
     request.cf?.region || null,
     request.cf?.city || null,
     request.headers.get('CF-Connecting-IP') || null,
-    platform || null,
-    player_id
+    platform || null
   ).run();
 
   // Handle session
